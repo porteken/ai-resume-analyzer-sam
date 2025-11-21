@@ -1,0 +1,39 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+
+# AWS SAM
+.aws-sam/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+Untitled.ipynb
+.ipynb_checkpoints/
+resume.pdf
+api_info.txt
+.env
+
+# Layer build artifacts
+layers/dependencies/python/
+
+# Logs
+*.log
+
+.claude/
+.mypy_cache/
+.ruff_cache/

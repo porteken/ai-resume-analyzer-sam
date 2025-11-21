@@ -1,0 +1,25 @@
+{
+  "include": [
+    "resume_analyzer"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "venv",
+    ".aws-sam",
+    "layers"
+  ],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownLambdaType": false,
+  "reportGeneralTypeIssues": false,
+  "venvPath": ".",
+  "venv": "venv"
+}
