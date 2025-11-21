@@ -1,0 +1,362 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  An AI Resume Analyzer with Lambda Layers and API Gateway that accepts PDF file uploads.
+
+Parameters:
+  GoogleApiKey:
+    Type: String
+    Description: Your Google API Key for the Gemini model.
+    NoEcho: true
+
+Resources:
+  # 1. DynamoDB Table for Job Results
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: resume-analyzer-results
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # 2. Lambda Layer for Dependencies
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: resume-analyzer-dependencies
+      Description: Python dependencies for resume analyzer
+      ContentUri: layers/dependencies/
+      CompatibleRuntimes:
+        - python3.11
+
+  # 3. S3 Bucket
+  ResumeS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+            AllowedHeaders:
+              - '*'
+
+  # 4. API Gateway REST API
+  ResumeAnalyzerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Auth:
+        ApiKeyRequired: true
+      # Increase payload size limit to 10MB for binary data
+      BinaryMediaTypes:
+        - 'application/pdf'
+        - 'multipart/form-data'
+      Cors:
+        AllowMethods: "'POST, OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      OpenApiVersion: '3.0.1'
+
+  # 5. Upload Handler Lambda Function
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: resume_analyzer/
+      Handler: upload_handler.lambda_handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 768
+      ReservedConcurrentExecutions: 20
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref ResumeS3Bucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResultsTable
+      Environment:
+        Variables:
+          RESUME_BUCKET: !Ref ResumeS3Bucket
+          RESULTS_TABLE: !Ref ResultsTable
+          PYTHONUNBUFFERED: '1'
+      Events:
+        UploadApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /upload
+            Method: POST
+            Auth:
+              ApiKeyRequired: true
+
+  # 6. Status Handler Lambda Function
+  StatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: resume_analyzer/
+      Handler: status_handler.lambda_handler
+      Runtime: python3.11
+      Timeout: 10
+      MemorySize: 256
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ResultsTable
+      Environment:
+        Variables:
+          RESULTS_TABLE: !Ref ResultsTable
+      Events:
+        StatusApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /status/{job_id}
+            Method: GET
+            Auth:
+              ApiKeyRequired: true
+
+  # 7. The Resume Analyzer Lambda Function
+  ResumeAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: resume_analyzer/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 2048
+      ReservedConcurrentExecutions: 10
+      Layers:
+        - !Ref DependenciesLayer
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ResumeS3Bucket
+        - S3WritePolicy:
+            BucketName: !Ref ResumeS3Bucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResultsTable
+      Environment:
+        Variables:
+          GOOGLE_API_KEY: !Ref GoogleApiKey
+          RESUME_BUCKET: !Ref ResumeS3Bucket
+          RESULTS_TABLE: !Ref ResultsTable
+          AWS_LAMBDA_LOG_LEVEL: INFO
+          PYTHONUNBUFFERED: '1'
+      Events:
+        AnalyzeResumeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /analyze
+            Method: POST
+            Auth:
+              ApiKeyRequired: true
+
+  # 8. Explicit API Deployment
+  ApiDeploymentTrigger:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ResumeAnalyzerFunction
+    Properties:
+      RestApiId: !Ref ResumeAnalyzerApi
+      StageName: prod
+      StageDescription:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+
+  # 9. API Key
+  ResumeAnalyzerApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: ApiDeploymentTrigger
+    Properties:
+      Name: ResumeAnalyzerApiKey
+      Description: API Key for Resume Analyzer
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref ResumeAnalyzerApi
+          StageName: prod
+
+  # 10. Usage Plan
+  ResumeAnalyzerUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ApiDeploymentTrigger
+    Properties:
+      UsagePlanName: ResumeAnalyzerUsagePlan
+      Description: Usage plan for Resume Analyzer API
+      ApiStages:
+        - ApiId: !Ref ResumeAnalyzerApi
+          Stage: prod
+      Throttle:
+        BurstLimit: 100
+        RateLimit: 50
+      Quota:
+        Limit: 10000
+        Period: MONTH
+
+  # 11. Link API Key to Usage Plan
+  ResumeAnalyzerUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ResumeAnalyzerApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ResumeAnalyzerUsagePlan
+
+  # 12. Permission for S3 to invoke Lambda
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ResumeAnalyzerFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 's3.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
+
+  # 13. Custom resource to configure S3 notifications
+  ConfigureS3Notification:
+    Type: Custom::S3Notification
+    DependsOn: 
+      - S3InvokePermission
+      - ConfigNotificationFunction
+    Properties:
+      ServiceToken: !GetAtt ConfigNotificationFunction.Arn
+      BucketName: !Ref ResumeS3Bucket
+      LambdaArn: !GetAtt ResumeAnalyzerFunction.Arn
+      Events:
+        - 's3:ObjectCreated:*'
+      Filter:
+        Key:
+          FilterRules:
+            - Name: suffix
+              Value: '.pdf'
+
+  # 14. Helper Lambda role
+  ConfigNotificationFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: S3NotificationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:PutBucketNotification'
+                Resource: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
+
+  # 15. Helper Lambda function
+  ConfigNotificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.11
+      Role: !GetAtt ConfigNotificationFunctionRole.Arn
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import cfnresponse
+          
+          s3_client = boto3.client('s3')
+          
+          def lambda_handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      bucket_name = event['ResourceProperties']['BucketName']
+                      s3_client.put_bucket_notification_configuration(
+                          Bucket=bucket_name,
+                          NotificationConfiguration={}
+                      )
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  bucket_name = event['ResourceProperties']['BucketName']
+                  lambda_arn = event['ResourceProperties']['LambdaArn']
+                  
+                  notification_config = {
+                      'LambdaFunctionConfigurations': [
+                          {
+                              'LambdaFunctionArn': lambda_arn,
+                              'Events': ['s3:ObjectCreated:*'],
+                              'Filter': {
+                                  'Key': {
+                                      'FilterRules': [
+                                          {
+                                              'Name': 'suffix',
+                                              'Value': '.pdf'
+                                          }
+                                      ]
+                                  }
+                              }
+                          }
+                      ]
+                  }
+                  
+                  s3_client.put_bucket_notification_configuration(
+                      Bucket=bucket_name,
+                      NotificationConfiguration=notification_config
+                  )
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+Outputs:
+  ResumeBucketName:
+    Description: "Name of the S3 bucket to upload resumes to."
+    Value: !Ref ResumeS3Bucket
+  
+  ResumeBucketArn:
+    Description: "ARN of the S3 bucket."
+    Value: !GetAtt ResumeS3Bucket.Arn
+  
+  LambdaFunctionArn:
+    Description: "ARN of the Resume Analyzer Lambda function."
+    Value: !GetAtt ResumeAnalyzerFunction.Arn
+  
+  LambdaFunctionName:
+    Description: "Name of the Resume Analyzer Lambda function."
+    Value: !Ref ResumeAnalyzerFunction
+  
+  LayerArn:
+    Description: "ARN of the dependencies layer."
+    Value: !Ref DependenciesLayer
+  
+  UploadEndpoint:
+    Description: "API Gateway upload endpoint URL"
+    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/upload"
+
+  StatusEndpoint:
+    Description: "API Gateway status endpoint URL (use {job_id} placeholder)"
+    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/status/{job_id}"
+
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL (legacy direct analyze endpoint)"
+    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/analyze"
+
+  ApiKeyId:
+    Description: "API Key ID (use this to retrieve the actual key value)"
+    Value: !Ref ResumeAnalyzerApiKey
+
+  ResultsTableName:
+    Description: "DynamoDB table name for job results"
+    Value: !Ref ResultsTable
