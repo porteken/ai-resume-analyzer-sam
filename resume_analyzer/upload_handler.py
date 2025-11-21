@@ -4,15 +4,27 @@ import os
 import traceback
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 import boto3
 
 s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
+sts_client = boto3.client("sts")
 
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
+
+
+@lru_cache(maxsize=1)
+def get_aws_account_id() -> str:
+    """Fetches and caches the AWS Account ID for ownership verification."""
+    try:
+        return sts_client.get_caller_identity()["Account"]
+    except Exception as e:
+        print(f"ERROR fetching Account ID: {e}")
+        return ""
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -22,7 +34,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     print(f"Upload handler invoked: {json.dumps(event, default=str)[:500]}")
 
     try:
-        # Parse request body
         if "body" not in event:
             return {
                 "statusCode": 400,
@@ -41,7 +52,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
         body_json = json.loads(body)
 
-        # Validate required fields
         if "pdf_base64" not in body_json:
             return {
                 "statusCode": 400,
@@ -52,24 +62,29 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         job_description = body_json.get("job_description", "General resume analysis")
         filename = body_json.get("filename", "resume.pdf")
 
-        # Decode PDF
         pdf_bytes = base64.b64decode(body_json["pdf_base64"])
 
-        # Generate unique job ID
         job_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         s3_key = f"uploads/{timestamp}_{job_id}_{filename}"
 
-        # Save to S3 (this will trigger the analyzer Lambda)
-        s3_client.put_object(
-            Bucket=RESUME_BUCKET,
-            Key=s3_key,
-            Body=pdf_bytes,
-            ContentType="application/pdf",
-            Metadata={"job_id": job_id, "job_description": job_description, "filename": filename},
-        )
+        account_id = get_aws_account_id()
+        kwargs = {
+            "Bucket": RESUME_BUCKET,
+            "Key": s3_key,
+            "Body": pdf_bytes,
+            "ContentType": "application/pdf",
+            "Metadata": {
+                "job_id": job_id,
+                "job_description": job_description,
+                "filename": filename,
+            },
+        }
+        if account_id:
+            kwargs["ExpectedBucketOwner"] = account_id
 
-        # Create initial job record in DynamoDB
+        s3_client.put_object(**kwargs)
+
         table = dynamodb.Table(RESULTS_TABLE)  # type: ignore[attr-defined]
         table.put_item(
             Item={

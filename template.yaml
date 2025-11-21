@@ -10,7 +10,32 @@ Parameters:
     NoEcho: true
 
 Resources:
-  # 1. DynamoDB Table for Job Results
+  # CloudWatch Log Groups for Lambda functions
+  UploadFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${UploadFunction}'
+      RetentionInDays: 7
+
+  StatusFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${StatusFunction}'
+      RetentionInDays: 7
+
+  ResumeAnalyzerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ResumeAnalyzerFunction}'
+      RetentionInDays: 14
+
+  ConfigNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ConfigNotificationFunction}'
+      RetentionInDays: 3
+
+  # DynamoDB Table
   ResultsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -26,7 +51,7 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
-  # 2. Lambda Layer for Dependencies
+  
   DependenciesLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -36,7 +61,7 @@ Resources:
       CompatibleRuntimes:
         - python3.11
 
-  # 3. S3 Bucket
+  
   ResumeS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -56,14 +81,14 @@ Resources:
             AllowedHeaders:
               - '*'
 
-  # 4. API Gateway REST API
+  
   ResumeAnalyzerApi:
     Type: AWS::Serverless::Api
     Properties:
       StageName: prod
       Auth:
         ApiKeyRequired: true
-      # Increase payload size limit to 10MB for binary data
+      
       BinaryMediaTypes:
         - 'application/pdf'
         - 'multipart/form-data'
@@ -73,9 +98,10 @@ Resources:
         AllowOrigin: "'*'"
       OpenApiVersion: '3.0.1'
 
-  # 5. Upload Handler Lambda Function
+
   UploadFunction:
     Type: AWS::Serverless::Function
+    DependsOn: UploadFunctionLogGroup
     Properties:
       CodeUri: resume_analyzer/
       Handler: upload_handler.lambda_handler
@@ -103,9 +129,10 @@ Resources:
             Auth:
               ApiKeyRequired: true
 
-  # 6. Status Handler Lambda Function
+
   StatusFunction:
     Type: AWS::Serverless::Function
+    DependsOn: StatusFunctionLogGroup
     Properties:
       CodeUri: resume_analyzer/
       Handler: status_handler.lambda_handler
@@ -128,9 +155,10 @@ Resources:
             Auth:
               ApiKeyRequired: true
 
-  # 7. The Resume Analyzer Lambda Function
+
   ResumeAnalyzerFunction:
     Type: AWS::Serverless::Function
+    DependsOn: ResumeAnalyzerFunctionLogGroup
     Properties:
       CodeUri: resume_analyzer/
       Handler: lambda_function.lambda_handler
@@ -164,7 +192,7 @@ Resources:
             Auth:
               ApiKeyRequired: true
 
-  # 8. Explicit API Deployment
+  
   ApiDeploymentTrigger:
     Type: AWS::ApiGateway::Deployment
     DependsOn: ResumeAnalyzerFunction
@@ -175,7 +203,7 @@ Resources:
         ThrottlingBurstLimit: 100
         ThrottlingRateLimit: 50
 
-  # 9. API Key
+  
   ResumeAnalyzerApiKey:
     Type: AWS::ApiGateway::ApiKey
     DependsOn: ApiDeploymentTrigger
@@ -187,7 +215,7 @@ Resources:
         - RestApiId: !Ref ResumeAnalyzerApi
           StageName: prod
 
-  # 10. Usage Plan
+  
   ResumeAnalyzerUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     DependsOn: ApiDeploymentTrigger
@@ -204,7 +232,7 @@ Resources:
         Limit: 10000
         Period: MONTH
 
-  # 11. Link API Key to Usage Plan
+  
   ResumeAnalyzerUsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
     Properties:
@@ -212,7 +240,7 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref ResumeAnalyzerUsagePlan
 
-  # 12. Permission for S3 to invoke Lambda
+  
   S3InvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -221,7 +249,7 @@ Resources:
       Principal: 's3.amazonaws.com'
       SourceArn: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
 
-  # 13. Custom resource to configure S3 notifications
+  
   ConfigureS3Notification:
     Type: Custom::S3Notification
     DependsOn: 
@@ -239,7 +267,7 @@ Resources:
             - Name: suffix
               Value: '.pdf'
 
-  # 14. Helper Lambda role
+  
   ConfigNotificationFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -262,9 +290,10 @@ Resources:
                   - 's3:PutBucketNotification'
                 Resource: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
 
-  # 15. Helper Lambda function
+
   ConfigNotificationFunction:
     Type: AWS::Lambda::Function
+    DependsOn: ConfigNotificationFunctionLogGroup
     Properties:
       Runtime: python3.11
       Role: !GetAtt ConfigNotificationFunctionRole.Arn
