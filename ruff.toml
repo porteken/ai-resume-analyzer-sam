@@ -17,29 +17,28 @@ target-version = "py311"
 select = ["ALL"]
 
 ignore = [
-    # Allow violations in test files
-    "PLR2004", # Magic value comparisons
-    "PTH",     # Use pathlib (not needed for simple scripts)
-    "EXE002",  # Executable without shebang
-    "E501",    # Line too long (handled by formatter)
-    "D100",    # Missing docstring in public module
-    "D104",    # Missing docstring in public package
-    "D200",    # One-line docstring should fit on one line
-    "D205",    # 1 blank line between summary and description
-    "D401",    # Imperative mood for docstrings
-    "T201",    # Print statements (needed for Lambda logging)
-    "S101",    # Use of assert
-    "COM812",  # Missing trailing comma (conflicts with formatter)
-    "ISC001",  # Implicit string concatenation (conflicts with formatter)
-    "BLE001",  # Blind exception catch (acceptable in Lambda for error handling)
-    "TRY300",  # Try-else pattern (not needed for simple error handling)
-    "EM101",   # Exception string literals
-    "EM102",   # Exception f-string
-    "TRY003",  # Long exception messages
-    "FBT001",  # Boolean positional arg
-    "FBT002",  # Boolean default arg
-    "DTZ005",  # datetime.now() without tz (Lambda uses UTC by default)
-    "PLR0911", # Too many return statements
-    "PGH003",  # Use specific rule codes when ignoring type issues
-    "ANN401",  # Dynamically typed Any (needed for Lambda context)
+    "PLR2004", 
+    "PTH",     
+    "EXE002",  
+    "E501",    
+    "D100",    
+    "D104",    
+    "D200",    
+    "D205",    
+    "D401",    
+    "T201",    
+    "S101",    
+    "COM812",  
+    "ISC001",  
+    "BLE001",  
+    "TRY300",  
+    "EM101",   
+    "EM102",   
+    "TRY003",  
+    "FBT001",  
+    "FBT002",  
+    "DTZ005",  
+    "PLR0911", 
+    "PGH003",  
+    "ANN401",  
 ]
