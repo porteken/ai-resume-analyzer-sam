@@ -10,7 +10,6 @@ from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
-from crewai import Agent, Crew, Task
 from langchain_google_genai import ChatGoogleGenerativeAI
 from PyPDF2 import PdfReader
 
@@ -168,55 +167,51 @@ def _update_job_status(
 
 
 def analyze_resume(resume_content: str, job_description: str) -> str:
-    """Run the CrewAI analysis on the resume and job description."""
+    """Run ultra-optimized direct LLM analysis - bypasses CrewAI overhead."""
     if not gemini_llm:
         return "Error: Gemini LLM not initialized. Check API key configuration."
 
     try:
-        resume_agent = Agent(
-            role="Resume Analyst",
-            goal="Extract skills.",
-            backstory="Expert analyst.",
-            verbose=True,
-            allow_delegation=False,
-            llm=gemini_llm,
-        )
-        jd_agent = Agent(
-            role="Job Analyst",
-            goal="Extract requirements.",
-            backstory="JD Specialist.",
-            verbose=True,
-            allow_delegation=False,
-            llm=gemini_llm,
-        )
-        match_agent = Agent(
-            role="Resume Matcher",
-            goal="Compare vs JD.",
-            backstory="Hiring Manager.",
-            verbose=True,
-            allow_delegation=False,
-            llm=gemini_llm,
-        )
+        prompt = f"""You are an expert recruiter analyzing a resume against a job description.
 
-        tasks = [
-            Task(
-                description=f"Resume:\n{resume_content}",
-                expected_output="Skills.",
-                agent=resume_agent,
-            ),
-            Task(
-                description=f"JD:\n{job_description}",
-                expected_output="Requirements.",
-                agent=jd_agent,
-            ),
-            Task(description="Compare.", expected_output="Report.", agent=match_agent),
-        ]
+JOB DESCRIPTION:
+{job_description}
 
-        crew = Crew(agents=[resume_agent, jd_agent, match_agent], tasks=tasks, verbose=True)
-        return str(crew.kickoff())
+RESUME:
+{resume_content}
+
+Provide a comprehensive analysis in this exact format:
+
+## Key Strengths
+- [Relevant skill/experience 1]
+- [Relevant skill/experience 2]
+- [Relevant skill/experience 3]
+- [Relevant skill/experience 4]
+- [Relevant skill/experience 5]
+
+## Gaps & Areas for Development
+- [Missing skill/experience 1]
+- [Missing skill/experience 2]
+- [Missing skill/experience 3]
+- [Missing skill/experience 4]
+- [Missing skill/experience 5]
+
+## Recommendations
+- [Actionable recommendation 1]
+- [Actionable recommendation 2]
+- [Actionable recommendation 3]
+
+Be specific, concise, and focus on technical qualifications."""
+
+        response = gemini_llm.invoke(prompt)
+
+        if hasattr(response, "content"):
+            return str(response.content)
+        return str(response)
+
     except Exception as e:
         traceback.print_exc()
-        return f"Error during CrewAI analysis: {e}"
+        return f"Error during analysis: {e}"
 
 
 def _parse_s3_event(event: dict) -> tuple[dict[str, Any] | None, str | None]:
