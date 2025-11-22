@@ -68,6 +68,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         s3_key = f"uploads/{timestamp}_{job_id}_{filename}"
 
+        safe_job_description = job_description.replace("\n", " ").replace("\r", " ").strip()
+        safe_filename = filename.replace("\n", " ").replace("\r", " ").strip()
+
         account_id = get_aws_account_id()
         kwargs = {
             "Bucket": RESUME_BUCKET,
@@ -76,8 +79,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             "ContentType": "application/pdf",
             "Metadata": {
                 "job_id": job_id,
-                "job_description": job_description,
-                "filename": filename,
+                "job_description": safe_job_description[:2000],
+                "filename": safe_filename[:256],
             },
         }
         if account_id:
@@ -95,14 +98,14 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "job_description": job_description,
                 "filename": filename,
                 "created_at": datetime.now().isoformat(),
-                "ttl": int(datetime.now().timestamp()) + 86400,  # 24 hour TTL
+                "ttl": int(datetime.now().timestamp()) + 86400,
             }
         )
 
         print(f"Created job {job_id}, saved to {s3_key}")
 
         return {
-            "statusCode": 202,  # Accepted
+            "statusCode": 202,
             "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
             "body": json.dumps(
                 {

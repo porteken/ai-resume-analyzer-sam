@@ -1,4 +1,3 @@
-# Python virtual environments
 venv/
 .venv/
 env/
@@ -8,30 +7,26 @@ __pycache__/
 .pytest_cache/
 .coverage
 
-# AWS SAM
 .aws-sam/
 
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
 .DS_Store
 Thumbs.db
 
-# Project specific
 Untitled.ipynb
 .ipynb_checkpoints/
 resume.pdf
 api_info.txt
 .env
+test_cors.html
+CORS_FIX.md
 
-# Layer build artifacts
 layers/dependencies/python/
 
-# Logs
 *.log
 
 .claude/
