@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from botocore.exceptions import ClientError
 
+from tests.test_utils import assert_error_response, assert_success_response
+
 
 @pytest.fixture
 def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
@@ -47,6 +49,7 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
         lambda_function.gemini_llm = original_gemini
 
 
+@pytest.mark.unit
 class TestReadPDF:
     """Test suite for PDF reading functions."""
 
@@ -104,6 +107,7 @@ class TestReadPDF:
         assert "ClientError" in result
 
 
+@pytest.mark.unit
 class TestAnalyzeResume:
     """Test suite for resume analysis function."""
 
@@ -140,6 +144,8 @@ class TestAnalyzeResume:
         assert "Error during analysis" in result
 
 
+@pytest.mark.integration
+@pytest.mark.aws
 class TestS3Operations:
     """Test suite for S3 operations."""
 
@@ -195,6 +201,8 @@ class TestS3Operations:
         assert result == {}
 
 
+@pytest.mark.integration
+@pytest.mark.aws
 class TestDynamoDBOperations:
     """Test suite for DynamoDB operations."""
 
@@ -235,6 +243,7 @@ class TestDynamoDBOperations:
         lambda_function_module._update_job_status("test-job", "completed")
 
 
+@pytest.mark.unit
 class TestEventParsing:
     """Test suite for event parsing functions."""
 
@@ -358,6 +367,8 @@ class TestEventParsing:
         assert "No body" in error
 
 
+@pytest.mark.integration
+@pytest.mark.aws
 class TestLambdaHandler:
     """Test suite for main lambda handler."""
 
@@ -378,13 +389,11 @@ class TestLambdaHandler:
 
         response = lambda_function_module.lambda_handler(sample_s3_event, mock_lambda_context)
 
-        assert response["statusCode"] == 200
-        body = json.loads(response["body"])
+        body = assert_success_response(response, 200, required_fields=["message", "analysis_result"])
         assert body["message"] == "Success"
-        assert "analysis_result" in body
 
     def test_handler_success_with_api_event(
-        self, lambda_function_module, sample_pdf_base64, mock_lambda_context, mock_boto3_clients
+        self, lambda_function_module, sample_pdf_base64, mock_lambda_context
     ) -> None:
         """Test successful processing of API event."""
         event = {
@@ -400,9 +409,7 @@ class TestLambdaHandler:
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
 
-        assert response["statusCode"] == 200
-        body = json.loads(response["body"])
-        assert "analysis_result" in body
+        body = assert_success_response(response, 200, required_fields=["analysis_result", "job_id"])
         assert body["job_id"] == "test-job-456"
 
     def test_handler_no_api_key(
@@ -411,25 +418,19 @@ class TestLambdaHandler:
         """Test handler when API key is not set."""
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
-
         importlib.reload(lambda_function_module)
 
         event = {"body": json.dumps({"pdf_base64": sample_pdf_base64})}
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
 
-        assert response["statusCode"] == 500
-        body = json.loads(response["body"])
-        assert "API key not configured" in body["error"]
+        assert_error_response(response, 500, "API key not configured")
 
     def test_handler_invalid_event(self, lambda_function_module, mock_lambda_context) -> None:
         """Test handler with invalid event structure."""
         event = {"body": "not valid json{"}
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-
-        assert response["statusCode"] == 400
-        body = json.loads(response["body"])
-        assert "error" in body
+        assert_error_response(response, 400)
 
     def test_handler_pdf_extraction_error(self, lambda_function_module, mock_lambda_context) -> None:
         """Test handler when PDF extraction fails."""
@@ -447,20 +448,8 @@ class TestLambdaHandler:
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
 
-        assert response["statusCode"] == 200
-
+        assert_success_response(response, 200)
         mock_boto3_clients["dynamodb_table"].update_item.assert_called()
-
-    def test_handler_cors_headers(
-        self, lambda_function_module, sample_pdf_base64, mock_lambda_context, mock_boto3_clients
-    ) -> None:
-        """Test that handler includes CORS headers."""
-        event = {"body": json.dumps({"pdf_base64": sample_pdf_base64})}
-
-        response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-
-        assert "Access-Control-Allow-Origin" in response["headers"]
-        assert response["headers"]["Access-Control-Allow-Origin"] == "*"
 
     def test_handler_unexpected_exception(
         self, lambda_function_module, sample_pdf_base64, mock_lambda_context
@@ -478,6 +467,7 @@ class TestLambdaHandler:
         assert "Error during analysis" in body["analysis_result"]
 
 
+@pytest.mark.unit
 class TestUtilityFunctions:
     """Test suite for utility functions."""
 

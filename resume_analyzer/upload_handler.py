@@ -1,7 +1,7 @@
 import base64
 import json
+import logging
 import os
-import traceback
 import uuid
 from datetime import datetime
 from functools import lru_cache
@@ -16,14 +16,16 @@ sts_client = boto3.client("sts")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 
+logger = logging.getLogger(__name__)
+
 
 @lru_cache(maxsize=1)
 def get_aws_account_id() -> str:
     """Fetches and caches the AWS Account ID for ownership verification."""
     try:
         return sts_client.get_caller_identity()["Account"]
-    except Exception as e:
-        print(f"ERROR fetching Account ID: {e}")
+    except Exception:
+        logger.exception("ERROR fetching Account ID")
         return ""
 
 
@@ -31,7 +33,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Upload handler that accepts a PDF, saves to S3, and returns a job ID.
     The S3 trigger will automatically invoke the analyzer Lambda.
     """
-    print(f"Upload handler invoked: {json.dumps(event, default=str)[:500]}")
+    logger.info("Upload handler invoked: %s", json.dumps(event, default=str)[:500])
 
     try:
         if "body" not in event:
@@ -102,7 +104,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             }
         )
 
-        print(f"Created job {job_id}, saved to {s3_key}")
+        logger.info("Created job %s, saved to %s", job_id, s3_key)
 
         return {
             "statusCode": 202,
@@ -118,7 +120,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
     except json.JSONDecodeError as e:
-        print(f"JSON decode error: {e}")
+        logger.exception("JSON decode error")
         return {
             "statusCode": 400,
             "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
@@ -126,9 +128,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
     except Exception as e:
-        print(f"ERROR: {e}")
-        traceback.print_exc()
-
+        logger.exception("ERROR")
         return {
             "statusCode": 500,
             "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},

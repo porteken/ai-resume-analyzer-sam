@@ -1,8 +1,8 @@
 import base64
 import io
 import json
+import logging
 import os
-import traceback
 import warnings
 from datetime import datetime
 from functools import lru_cache
@@ -13,6 +13,8 @@ from botocore.exceptions import ClientError
 from PyPDF2 import PdfReader
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
 
 s3_client = boto3.client("s3")
 dynamodb: Any = boto3.resource("dynamodb")
@@ -26,19 +28,19 @@ EXPR_ATTR_STATUS = "#status"
 EXPR_VAL_STATUS = ":status"
 EXPR_VAL_ERROR = ":error"
 
-print(f"Lambda initialized. API_KEY: {bool(api_key)}, BUCKET: {RESUME_BUCKET}")
+logger.info("Lambda initialized. API_KEY: %s, BUCKET: %s", bool(api_key), RESUME_BUCKET)
 
 gemini_llm = None
 if api_key:
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
         gemini_llm = ChatGoogleGenerativeAI(
-            model="models/gemini-2.5-flash",
+            model="gemini-1.5-flash",
             google_api_key=api_key,
         )
-        print("Gemini LLM initialized successfully")
-    except Exception as e:
-        print(f"ERROR initializing Gemini LLM: {e}")
+        logger.info("Gemini LLM initialized successfully")
+    except Exception:
+        logger.exception("ERROR initializing Gemini LLM")
 
 
 @lru_cache(maxsize=1)
@@ -46,8 +48,8 @@ def get_aws_account_id() -> str:
     """Fetches and caches the AWS Account ID for ownership verification."""
     try:
         return sts_client.get_caller_identity()["Account"]
-    except Exception as e:
-        print(f"ERROR fetching Account ID: {e}")
+    except Exception:
+        logger.exception("ERROR fetching Account ID")
         return ""
 
 
@@ -65,8 +67,7 @@ def read_pdf_from_bytes(pdf_bytes: bytes) -> str:
                 return "Error: Could not extract text from the PDF."
             return text
     except Exception as e:
-        print(f"ERROR reading PDF: {e}")
-        traceback.print_exc()
+        logger.exception("ERROR reading PDF")
         return f"An error occurred while reading the PDF: {e}"
 
 
@@ -74,7 +75,7 @@ def read_pdf_from_s3(bucket_name: str, key: str) -> str:
     """Reads a PDF from S3 and returns text with S7608 compliance."""
     account_id = get_aws_account_id()
     try:
-        print(f"Reading PDF from s3://{bucket_name}/{key}")
+        logger.info("Reading PDF from s3://%s/%s", bucket_name, key)
         kwargs = {"Bucket": bucket_name, "Key": key}
         if account_id:
             kwargs["ExpectedBucketOwner"] = account_id
@@ -87,14 +88,14 @@ def read_pdf_from_s3(bucket_name: str, key: str) -> str:
             return f"Error: The file '{key}' was not found in bucket '{bucket_name}'."
         return f"AWS ClientError (Access/Ownership): {e}"
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("An error occurred while reading the PDF from S3")
         return f"An error occurred while reading the PDF from S3: {e}"
 
 
 def save_pdf_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
     """Saves PDF bytes to S3 and returns the S3 key."""
     if not RESUME_BUCKET:
-        print("ERROR: RESUME_BUCKET environment variable not set")
+        logger.error("ERROR: RESUME_BUCKET environment variable not set")
         return None
 
     account_id = get_aws_account_id()
@@ -113,9 +114,8 @@ def save_pdf_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
 
         s3_client.put_object(**kwargs)
         return s3_key
-    except Exception as e:
-        print(f"ERROR saving PDF to S3: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("ERROR saving PDF to S3")
         return None
 
 
@@ -128,7 +128,7 @@ def _get_s3_metadata(bucket: str, key: str) -> dict:
             kwargs["ExpectedBucketOwner"] = account_id
         return s3_client.head_object(**kwargs).get("Metadata", {})
     except Exception as e:
-        print(f"WARNING: Could not get S3 metadata: {e}")
+        logger.warning("WARNING: Could not get S3 metadata: %s", e)
         return {}
 
 
@@ -163,7 +163,7 @@ def _update_job_status(
             ExpressionAttributeValues=expression_values,
         )
     except Exception as e:
-        print(f"WARNING: Failed to update DynamoDB: {e}")
+        logger.warning("WARNING: Failed to update DynamoDB: %s", e)
 
 
 def analyze_resume(resume_content: str, job_description: str) -> str:
@@ -210,7 +210,7 @@ Be specific, concise, and focus on technical qualifications."""
         return str(response)
 
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("Error during analysis")
         return f"Error during analysis: {e}"
 
 
@@ -309,13 +309,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     if not resume_content or "Error:" in resume_content:
         msg = resume_content if resume_content else "Failed to extract content"
-        print(f"ERROR: {msg}")
+        logger.error("ERROR: %s", msg)
         if job_id:
             _update_job_status(job_id, "failed", error_msg=msg)
         return {"statusCode": 500, "body": json.dumps({"error": msg})}
 
     try:
-        print("Starting resume analysis...")
+        logger.info("Starting resume analysis...")
         result = analyze_resume(resume_content, data.get("job_description", ""))
 
         if job_id:
@@ -334,7 +334,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             ),
         }
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("Unexpected error")
         if job_id:
             _update_job_status(job_id, "failed", error_msg=f"{e}")
         return {"statusCode": 500, "body": json.dumps({"error": f"Unexpected error: {e}"})}

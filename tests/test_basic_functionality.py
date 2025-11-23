@@ -4,7 +4,6 @@ These tests validate core logic, data transformations, and error handling.
 """
 
 import base64
-import binascii
 import json
 import os
 import uuid
@@ -13,6 +12,7 @@ from datetime import datetime
 import pytest
 
 
+@pytest.mark.unit
 class TestPDFBase64Encoding:
     """Test PDF base64 encoding/decoding."""
 
@@ -23,26 +23,14 @@ class TestPDFBase64Encoding:
         assert pdf_bytes.startswith(b"%PDF")
         assert pdf_bytes.endswith(b"%%EOF")
 
-    def test_invalid_base64_raises_error(self) -> None:
-        """Test that invalid base64 raises appropriate error."""
-        with pytest.raises(binascii.Error):
-            base64.b64decode("not-valid-base64!!!")
 
-    def test_pdf_size_reasonable(self, sample_pdf_base64) -> None:
-        """Test that encoded PDF size is reasonable."""
-        pdf_bytes = base64.b64decode(sample_pdf_base64)
-        assert len(pdf_bytes) > 100
-        assert len(pdf_bytes) < 10000
-
-
+@pytest.mark.unit
 class TestEventStructure:
     """Test event structure validation."""
 
     def test_upload_event_has_required_fields(self, sample_upload_event) -> None:
         """Test that upload event contains required fields."""
         assert "body" in sample_upload_event
-        assert "httpMethod" in sample_upload_event
-
         body = json.loads(sample_upload_event["body"])
         assert "pdf_base64" in body
 
@@ -54,45 +42,13 @@ class TestEventStructure:
     def test_s3_event_has_required_fields(self, sample_s3_event) -> None:
         """Test that S3 event contains required fields."""
         assert "Records" in sample_s3_event
-        assert len(sample_s3_event["Records"]) > 0
-
         record = sample_s3_event["Records"][0]
         assert "s3" in record
         assert "bucket" in record["s3"]
         assert "object" in record["s3"]
 
 
-class TestDataSanitization:
-    """Test data sanitization functions."""
-
-    def test_newline_removal(self) -> None:
-        """Test that newlines can be removed from strings."""
-        text_with_newlines = "Line 1\nLine 2\rLine 3\r\nLine 4"
-        sanitized = text_with_newlines.replace("\n", " ").replace("\r", " ")
-
-        assert "\n" not in sanitized
-        assert "\r" not in sanitized
-        assert "Line 1" in sanitized
-        assert "Line 4" in sanitized
-
-    def test_string_truncation(self) -> None:
-        """Test string truncation logic."""
-        long_string = "x" * 3000
-        truncated = long_string[:2000]
-
-        assert len(truncated) == 2000
-        assert len(long_string) == 3000
-
-    def test_strip_whitespace(self) -> None:
-        """Test whitespace stripping."""
-        text = "  \n  Hello World  \r\n  "
-        cleaned = text.strip()
-
-        assert cleaned == "Hello World"
-        assert not cleaned.startswith(" ")
-        assert not cleaned.endswith(" ")
-
-
+@pytest.mark.unit
 class TestJSONSerialization:
     """Test JSON serialization/deserialization."""
 

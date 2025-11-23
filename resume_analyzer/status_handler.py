@@ -1,6 +1,6 @@
 import json
+import logging
 import os
-import traceback
 from typing import Any
 
 import boto3
@@ -8,10 +8,12 @@ import boto3
 dynamodb = boto3.resource("dynamodb")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 
+logger = logging.getLogger(__name__)
+
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Status handler that returns the analysis result for a given job ID."""
-    print(f"Status handler invoked: {json.dumps(event, default=str)[:500]}")
+    logger.info("Status handler invoked: %s", json.dumps(event, default=str)[:500])
 
     try:
         job_id = event.get("pathParameters", {}).get("job_id")
@@ -54,9 +56,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
     except Exception as e:
-        print(f"ERROR: {e}")
-        traceback.print_exc()
-
+        logger.exception("ERROR")
         return {
             "statusCode": 500,
             "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
