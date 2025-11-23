@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from botocore.exceptions import ClientError
-from pytest import MonkeyPatch
 
 
 @pytest.fixture
@@ -16,7 +15,6 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     """Import lambda_function with mocked dependencies."""
     from resume_analyzer import lambda_function
 
-    
     original_s3 = lambda_function.s3_client
     original_dynamodb = lambda_function.dynamodb
     original_sts = lambda_function.sts_client
@@ -25,22 +23,21 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     lambda_function.dynamodb = mock_boto3_clients["dynamodb"]
     lambda_function.sts_client = mock_boto3_clients["sts"]
 
-    
     mock_llm = MagicMock()
     mock_response = MagicMock()
     mock_response.content = (
-        "
-        "
-        "
+        "## Key Strengths\n- Python expert\n\n"
+        "## Gaps & Areas for Development\n- Limited leadership\n\n"
+        "## Recommendations\n- Take leadership courses"
     )
     mock_llm.invoke.return_value = mock_response
     original_gemini = lambda_function.gemini_llm
     lambda_function.gemini_llm = mock_llm
 
     try:
-        
+
         lambda_function.api_key = "test-api-key-123"
-        
+
         lambda_function.get_aws_account_id.cache_clear()
         yield lambda_function
     finally:
@@ -70,7 +67,6 @@ class TestReadPDF:
 
     def test_read_pdf_from_bytes_empty(self, lambda_function_module: Any) -> None:
         """Test PDF reading with empty content."""
-        
         empty_pdf = b"%PDF-1.4\n%%EOF"
         result = lambda_function_module.read_pdf_from_bytes(empty_pdf)
 
@@ -120,11 +116,10 @@ class TestAnalyzeResume:
 
         assert isinstance(result, str)
         assert len(result) > 0
-        assert "
+        assert "## Key Strengths" in result or "Python" in result
 
     def test_analyze_resume_no_api_key(self, lambda_function_module: Any) -> None:
         """Test analysis when API key is not configured."""
-        
         original_llm = lambda_function_module.gemini_llm
         lambda_function_module.gemini_llm = None
 
@@ -133,7 +128,7 @@ class TestAnalyzeResume:
         assert "Error" in result
         assert "not initialized" in result
 
-        
+
         lambda_function_module.gemini_llm = original_llm
 
     def test_analyze_resume_llm_error(self, lambda_function_module) -> None:
@@ -157,7 +152,7 @@ class TestS3Operations:
         assert "uploads/" in result
         assert "test-resume.pdf" in result
 
-        
+
         mock_boto3_clients["s3"].put_object.assert_called_once()
         call_args = mock_boto3_clients["s3"].put_object.call_args[1]
         assert call_args["ContentType"] == "application/pdf"
@@ -166,7 +161,7 @@ class TestS3Operations:
     def test_save_pdf_to_s3_no_bucket(self, lambda_function_module, monkeypatch) -> None:
         """Test save PDF when bucket env var is not set."""
         monkeypatch.delenv("RESUME_BUCKET", raising=False)
-        
+
 
         importlib.reload(lambda_function_module)
 
@@ -229,14 +224,14 @@ class TestDynamoDBOperations:
         """Test update with no job_id (should not crash)."""
         lambda_function_module._update_job_status(None, "completed")
 
-        
+
         mock_boto3_clients["dynamodb_table"].update_item.assert_not_called()
 
     def test_update_job_status_dynamodb_error(self, lambda_function_module, mock_boto3_clients) -> None:
         """Test update when DynamoDB fails (should not crash)."""
         mock_boto3_clients["dynamodb_table"].update_item.side_effect = Exception("DynamoDB error")
 
-        
+
         lambda_function_module._update_job_status("test-job", "completed")
 
 
@@ -415,7 +410,7 @@ class TestLambdaHandler:
     ) -> None:
         """Test handler when API key is not set."""
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-        
+
 
         importlib.reload(lambda_function_module)
 
@@ -453,7 +448,7 @@ class TestLambdaHandler:
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
 
         assert response["statusCode"] == 200
-        
+
         mock_boto3_clients["dynamodb_table"].update_item.assert_called()
 
     def test_handler_cors_headers(
@@ -477,8 +472,8 @@ class TestLambdaHandler:
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
 
-        
-        assert response["statusCode"] == 200  
+
+        assert response["statusCode"] == 200
         body = json.loads(response["body"])
         assert "Error during analysis" in body["analysis_result"]
 
@@ -497,7 +492,7 @@ class TestUtilityFunctions:
     def test_get_aws_account_id_error(self, lambda_function_module, mock_boto3_clients) -> None:
         """Test account ID retrieval with error."""
         lambda_function_module.get_aws_account_id.cache_clear()
-        
+
         mock_boto3_clients["sts"].get_caller_identity.side_effect = Exception("STS error")
 
         account_id = lambda_function_module.get_aws_account_id()
@@ -512,5 +507,5 @@ class TestUtilityFunctions:
         id2 = lambda_function_module.get_aws_account_id()
 
         assert id1 == id2
-        
+
         assert mock_boto3_clients["sts"].get_caller_identity.call_count == 1

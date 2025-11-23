@@ -12,7 +12,7 @@ def upload_handler_module(mock_boto3_clients) -> Any:
     """Import upload_handler with mocked dependencies."""
     from resume_analyzer import upload_handler
 
-    
+
     original_s3 = upload_handler.s3_client
     original_dynamodb = upload_handler.dynamodb
     original_sts = upload_handler.sts_client
@@ -46,14 +46,14 @@ class TestUploadHandler:
         assert body["message"] == "Resume uploaded successfully. Analysis in progress."
         assert "/analyze/" in body["poll_url"]
 
-        
+
         mock_boto3_clients["s3"].put_object.assert_called_once()
         call_args = mock_boto3_clients["s3"].put_object.call_args[1]
         assert call_args["Bucket"] == "test-resume-bucket"
         assert call_args["ContentType"] == "application/pdf"
         assert "uploads/" in call_args["Key"]
 
-        
+
         mock_boto3_clients["dynamodb_table"].put_item.assert_called_once()
         item_args = mock_boto3_clients["dynamodb_table"].put_item.call_args[1]["Item"]
         assert item_args["status"] == "processing"
@@ -128,14 +128,13 @@ class TestUploadHandler:
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
         assert response["statusCode"] == 202
 
-        
         call_args = mock_boto3_clients["s3"].put_object.call_args[1]
         metadata = call_args["Metadata"]
         assert "\n" not in metadata["job_description"]
         assert "\r" not in metadata["job_description"]
         assert "\n" not in metadata["filename"]
 
-        
+
         item_args = mock_boto3_clients["dynamodb_table"].put_item.call_args[1]["Item"]
         assert item_args["job_description"] == job_desc_with_newlines
 
@@ -148,7 +147,7 @@ class TestUploadHandler:
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
         assert response["statusCode"] == 202
 
-        
+
         item_args = mock_boto3_clients["dynamodb_table"].put_item.call_args[1]["Item"]
         assert item_args["job_description"] == "General resume analysis"
         assert item_args["filename"] == "resume.pdf"
@@ -184,23 +183,21 @@ class TestUploadHandler:
 
     def test_account_id_caching(self, upload_handler_module, mock_boto3_clients) -> None:
         """Test that AWS account ID is cached."""
-        
         upload_handler_module.get_aws_account_id.cache_clear()
 
-        
         id1 = upload_handler_module.get_aws_account_id()
         id2 = upload_handler_module.get_aws_account_id()
 
         assert id1 == id2 == "123456789012"
-        
+
         assert mock_boto3_clients["sts"].get_caller_identity.call_count == 1
 
     def test_long_metadata_truncation(
         self, upload_handler_module, sample_pdf_base64, mock_lambda_context, mock_boto3_clients
     ) -> None:
         """Test that long metadata values are truncated."""
-        long_description = "x" * 3000  
-        long_filename = "y" * 300  
+        long_description = "x" * 3000
+        long_filename = "y" * 300
 
         event = {
             "body": json.dumps(
@@ -216,7 +213,7 @@ class TestUploadHandler:
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
         assert response["statusCode"] == 202
 
-        
+
         call_args = mock_boto3_clients["s3"].put_object.call_args[1]
         metadata = call_args["Metadata"]
         assert len(metadata["job_description"]) <= 2000

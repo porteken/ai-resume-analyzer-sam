@@ -11,7 +11,7 @@ def status_handler_module(mock_boto3_clients) -> Any:
     """Import status_handler with mocked dependencies."""
     from resume_analyzer import status_handler
 
-    
+
     original_dynamodb = status_handler.dynamodb
     status_handler.dynamodb = mock_boto3_clients["dynamodb"]
 
@@ -34,7 +34,7 @@ class TestStatusHandler:
                 "status": "completed",
                 "filename": "test-resume.pdf",
                 "created_at": "2025-11-22T17:00:00",
-                "analysis_result": "
+                "analysis_result": "## Key Strengths\n- Python expert"
             }
         }
 
@@ -197,6 +197,6 @@ class TestStatusHandler:
         assert response["statusCode"] == 200
         body = json.loads(response["body"])
 
-        
+
         assert body["filename"] is None
         assert body["created_at"] is None
