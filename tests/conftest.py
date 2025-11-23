@@ -24,10 +24,10 @@ def mock_boto3_clients() -> dict[str, Any]:
     mock_dynamodb = MagicMock()
     mock_sts_client = MagicMock()
 
-    
+
     mock_sts_client.get_caller_identity.return_value = {"Account": "123456789012"}
 
-    
+
     mock_s3_client.get_object.return_value = {
         "Body": Mock(read=lambda: b"mock pdf content"),
         "Metadata": {"job_id": "test-job-123", "job_description": "Test description"},
@@ -39,7 +39,7 @@ def mock_boto3_clients() -> dict[str, Any]:
     mock_s3_client.exceptions = Mock()
     mock_s3_client.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
 
-    
+
     mock_table = MagicMock()
     mock_table.put_item.return_value = {}
     mock_table.get_item.return_value = {
@@ -65,7 +65,6 @@ def mock_boto3_clients() -> dict[str, Any]:
 @pytest.fixture
 def sample_pdf_base64() -> str:
     """Sample PDF file encoded in base64."""
-    
     pdf_content = b"""%PDF-1.4
 1 0 obj
 <<
