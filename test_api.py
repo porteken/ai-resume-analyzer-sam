@@ -130,12 +130,12 @@ while poll_count < max_polls:
         status = status_data.get("status", "unknown")
 
         if status == "processing":
-            print(f"[Poll 
+            print(f"[Poll #{poll_count}] Still processing... (elapsed: {elapsed:.1f}s)")
             time.sleep(2)
             continue
 
         elif status == "completed":
-            print(f"[Poll 
+            print(f"[Poll #{poll_count}] ✓ Analysis completed!")
             print()
             print("=" * 60)
             print("ANALYSIS RESULT")
@@ -161,14 +161,14 @@ while poll_count < max_polls:
 
         elif status == "failed":
             error = status_data.get("error", "Unknown error")
-            print(f"[Poll 
+            print(f"[Poll #{poll_count}] ✗ Analysis failed: {error}")
             print()
             print("Full response:")
             print(json.dumps(status_data, indent=2))
             sys.exit(1)
 
         else:
-            print(f"[Poll 
+            print(f"[Poll #{poll_count}] Unknown status: {status}")
             print()
             print("Full response:")
             print(json.dumps(status_data, indent=2))
