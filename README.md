@@ -1,6 +1,6 @@
 # AI Resume Analyzer - Backend API
 
-Backend for AI resume analyzer using CrewAI and Google Gemini.
+Backend for AI resume analyzer hosted [here](https://ai-resume-analyzer-app-lake.vercel.app/) using CrewAI and Google Gemini.
 
 ## API Endpoints
 
