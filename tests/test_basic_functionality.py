@@ -31,8 +31,8 @@ class TestPDFBase64Encoding:
     def test_pdf_size_reasonable(self, sample_pdf_base64) -> None:
         """Test that encoded PDF size is reasonable."""
         pdf_bytes = base64.b64decode(sample_pdf_base64)
-        assert len(pdf_bytes) > 100  # At least 100 bytes
-        assert len(pdf_bytes) < 10000  # Less than 10KB for test PDF
+        assert len(pdf_bytes) > 100  
+        assert len(pdf_bytes) < 10000  
 
 
 class TestEventStructure:
@@ -110,7 +110,7 @@ class TestJSONSerialization:
         json_str = json.dumps(response_data)
         assert isinstance(json_str, str)
 
-        # Verify it can be parsed back
+        
         parsed = json.loads(json_str)
         assert parsed["job_id"] == "test-123"
         assert parsed["status"] == "processing"
@@ -197,7 +197,7 @@ class TestStringManipulation:
     def test_job_id_format(self) -> None:
         """Test job ID format validation."""
         job_id = str(uuid.uuid4())
-        assert len(job_id) == 36  # UUID v4 format
+        assert len(job_id) == 36  
         assert job_id.count("-") == 4
 
     def test_s3_key_generation(self) -> None:
@@ -218,7 +218,7 @@ class TestStringManipulation:
         job_description = "x" * 3000
         filename = "y" * 300
 
-        # S3 metadata limits
+        
         safe_job_desc = job_description[:2000]
         safe_filename = filename[:256]
 
@@ -238,7 +238,7 @@ class TestEnvironmentVariables:
 
     def test_env_var_defaults(self) -> None:
         """Test environment variable default handling."""
-        # Test get with default
+        
         value = os.environ.get("NONEXISTENT_VAR", "default")
         assert value == "default"
 
@@ -276,7 +276,7 @@ class TestDataTypes:
         """Test safe dictionary access."""
         data = {"key1": "value1"}
 
-        # Safe access with default
+        
         value1 = data.get("key1", "default")
         value2 = data.get("key2", "default")
 
@@ -287,7 +287,7 @@ class TestDataTypes:
         """Test handling of None values."""
         value = None
 
-        # Test truthiness
+        
         assert not value
 
 
