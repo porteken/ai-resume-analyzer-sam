@@ -363,7 +363,7 @@ Resources:
                   print(f"Error: {str(e)}")
                   send(event, context, "FAILED", {}, reason=str(e))
 
-  # --- RENAMED Resource to force replacement ---
+  
   ConfigureS3NotificationV2:
     Type: Custom::S3Notification
     DependsOn:
