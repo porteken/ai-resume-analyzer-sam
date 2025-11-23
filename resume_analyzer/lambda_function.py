@@ -10,7 +10,6 @@ from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
-from langchain_google_genai import ChatGoogleGenerativeAI
 from PyPDF2 import PdfReader
 
 warnings.filterwarnings("ignore")
@@ -32,6 +31,7 @@ print(f"Lambda initialized. API_KEY: {bool(api_key)}, BUCKET: {RESUME_BUCKET}")
 gemini_llm = None
 if api_key:
     try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
         gemini_llm = ChatGoogleGenerativeAI(
             model="models/gemini-2.5-flash",
             google_api_key=api_key,
@@ -82,9 +82,9 @@ def read_pdf_from_s3(bucket_name: str, key: str) -> str:
         s3_object = s3_client.get_object(**kwargs)
         pdf_content = s3_object["Body"].read()
         return read_pdf_from_bytes(pdf_content)
-    except s3_client.exceptions.NoSuchKey:
-        return f"Error: The file '{key}' was not found in bucket '{bucket_name}'."
     except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchKey":
+            return f"Error: The file '{key}' was not found in bucket '{bucket_name}'."
         return f"AWS ClientError (Access/Ownership): {e}"
     except Exception as e:
         traceback.print_exc()
