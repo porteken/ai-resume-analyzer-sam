@@ -45,7 +45,7 @@ if api_key:
 
 @lru_cache(maxsize=1)
 def get_aws_account_id() -> str:
-    """Fetches and caches the AWS Account ID for ownership verification."""
+    """Fetches and caches AWS Account ID."""
     try:
         return sts_client.get_caller_identity()["Account"]
     except Exception:
@@ -72,7 +72,7 @@ def read_pdf_from_bytes(pdf_bytes: bytes) -> str:
 
 
 def read_pdf_from_s3(bucket_name: str, key: str) -> str:
-    """Reads a PDF from S3 and returns text with S7608 compliance."""
+    """Reads a PDF from S3 and returns text."""
     account_id = get_aws_account_id()
     try:
         logger.info("Reading PDF from s3://%s/%s", bucket_name, key)
@@ -120,7 +120,7 @@ def save_pdf_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
 
 
 def _get_s3_metadata(bucket: str, key: str) -> dict:
-    """Retrieves metadata for a job from S3 with S7608 compliance."""
+    """Retrieves metadata for a job from S3."""
     account_id = get_aws_account_id()
     try:
         kwargs = {"Bucket": bucket, "Key": key}
@@ -167,7 +167,7 @@ def _update_job_status(
 
 
 def analyze_resume(resume_content: str, job_description: str) -> str:
-    """Run ultra-optimized direct LLM analysis - bypasses CrewAI overhead."""
+    """Run LLM analysis."""
     if not gemini_llm:
         return "Error: Gemini LLM not initialized. Check API key configuration."
 
@@ -215,7 +215,7 @@ Be specific, concise, and focus on technical qualifications."""
 
 
 def _parse_s3_event(event: dict) -> tuple[dict[str, Any] | None, str | None]:
-    """Parses S3 event. Returns (data_dict, error_string)."""
+    """Parses S3 event."""
     try:
         s3_record = event["Records"][0]["s3"]
         bucket = s3_record["bucket"]["name"]
@@ -266,7 +266,7 @@ def _process_api_body(body_json: dict) -> tuple[dict[str, Any] | None, str | Non
 
 
 def _extract_event_data(event: dict) -> tuple[dict[str, Any], str | None]:
-    """Strategy pattern to extract standardized data from S3 or API events."""
+    """Pattern to extract data from S3 or API events."""
     if "Records" in event and event["Records"] and "s3" in event["Records"][0]:
         data, error = _parse_s3_event(event)
         if error:
@@ -294,9 +294,7 @@ def _extract_event_data(event: dict) -> tuple[dict[str, Any], str | None]:
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Main handler for the Lambda function.
-    Refactored for low Cognitive Complexity (Sonarqube) and S7608 compliance.
-    """
+    """Lambda handler for resume analysis."""
     if not api_key:
         return {"statusCode": 500, "body": json.dumps({"error": "API key not configured."})}
 

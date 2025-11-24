@@ -1,8 +1,4 @@
-"""Shared test utilities and common assertion helpers.
-
-This module provides reusable test utilities to reduce code duplication
-across the test suite.
-"""
+"""Shared test utilities and common assertion helpers."""
 
 import json
 from typing import Any

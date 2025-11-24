@@ -1,7 +1,4 @@
-"""Basic functionality tests that don't require complex AWS mocking.
-
-These tests validate core logic, data transformations, and error handling.
-"""
+"""Basic functionality tests that don't require complex AWS mocking."""
 
 import base64
 import json
