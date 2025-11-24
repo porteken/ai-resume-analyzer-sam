@@ -23,7 +23,6 @@ def assert_response_structure(
     response: dict[str, Any],
     expected_status: int,
     should_have_body: bool = True,
-    should_have_headers: bool = True
 ) -> None:
     """Assert that a response has the correct API Gateway structure.
 
@@ -38,13 +37,9 @@ def assert_response_structure(
     assert response["statusCode"] == expected_status, \
         f"Expected status {expected_status}, got {response['statusCode']}"
 
-    if should_have_headers and "headers" not in response:
-        # Headers are optional in some error responses
-        pass
 
     if should_have_body:
         assert "body" in response, "Response must contain body"
-        # Verify body is valid JSON
         try:
             json.loads(response["body"])
         except json.JSONDecodeError as err:
@@ -67,9 +62,8 @@ def assert_error_response(
         The parsed response body as a dictionary
 
     """
-    assert_response_structure(response, expected_status, should_have_body=True)
+    assert_response_structure(response, expected_status)
 
-    # CORS headers are optional in error responses
     if "headers" in response:
         assert_cors_headers(response)
 
