@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def get_aws_account_id() -> str:
-    """Fetches and caches the AWS Account ID for ownership verification."""
+    """Fetches and caches the AWS Account ID."""
     try:
         return sts_client.get_caller_identity()["Account"]
     except Exception:
@@ -30,9 +30,7 @@ def get_aws_account_id() -> str:
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Upload handler that accepts a PDF, saves to S3, and returns a job ID.
-    The S3 trigger will automatically invoke the analyzer Lambda.
-    """
+    """Upload handler that accepts a PDF, saves to S3, and returns a job ID."""
     logger.info("Upload handler invoked: %s", json.dumps(event, default=str)[:500])
 
     try:
