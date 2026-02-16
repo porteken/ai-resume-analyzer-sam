@@ -112,7 +112,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     "job_id": job_id,
                     "status": "processing",
                     "message": "Resume uploaded successfully. Analysis in progress.",
-                    "poll_url": f"/analyze/{job_id}",
+                    "poll_url": f"/status/{job_id}",
                 }
             ),
         }

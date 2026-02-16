@@ -1,4 +1,4 @@
-"""Unit tests for lambda_function.py (main analyzer)."""
+"""Unit tests for lambda_function.py."""
 
 import base64
 import importlib
