@@ -51,7 +51,7 @@ class TestUploadHandler:
 
         assert body["status"] == "processing"
         assert body["message"] == "Resume uploaded successfully. Analysis in progress."
-        assert "/analyze/" in body["poll_url"]
+        assert "/status/" in body["poll_url"]
 
         mock_boto3_clients["s3"].put_object.assert_called_once()
         call_args = mock_boto3_clients["s3"].put_object.call_args[1]

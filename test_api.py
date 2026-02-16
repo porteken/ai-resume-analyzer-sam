@@ -23,7 +23,7 @@ What Were Looking For
 """
 
 if not API_ENDPOINT or not API_KEY:
-    print("Usage: python test_async_api.py <API_ENDPOINT> <API_KEY> [PDF_FILE] [JOB_DESCRIPTION]")
+    print("Usage: python test_api.py <API_ENDPOINT> <API_KEY> [PDF_FILE] [JOB_DESCRIPTION]")
     sys.exit(1)
 API_BASE = API_ENDPOINT.rstrip("/").replace("/upload", "").replace("/analyze", "")
 

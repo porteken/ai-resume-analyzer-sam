@@ -37,7 +37,6 @@ Resources:
   ResultsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: resume-analyzer-results
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: job_id
@@ -61,6 +60,16 @@ Resources:
   ResumeS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireUploadedResumes
+            Status: Enabled
+            ExpirationInDays: 30
+            Prefix: uploads/
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -276,6 +285,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - 's3:GetBucketNotification'
                   - 's3:PutBucketNotification'
                 Resource: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
 
@@ -332,25 +342,48 @@ Resources:
                   
                   bucket_name = event['ResourceProperties']['BucketName']
                   lambda_arn = event['ResourceProperties']['LambdaArn']
+                  notification_id = 'resume-analyzer-pdf-created'
+                  
+                  existing_config = s3_client.get_bucket_notification_configuration(Bucket=bucket_name)
+                  lambda_configs = existing_config.get('LambdaFunctionConfigurations', [])
+                  
+                  managed_lambda_config = {
+                      'Id': notification_id,
+                      'LambdaFunctionArn': lambda_arn,
+                      'Events': ['s3:ObjectCreated:*'],
+                      'Filter': {
+                          'Key': {
+                              'FilterRules': [
+                                  {
+                                      'Name': 'suffix',
+                                      'Value': '.pdf'
+                                  }
+                              ]
+                          }
+                      }
+                  }
+                  
+                  updated_lambda_configs = []
+                  replaced = False
+                  for config in lambda_configs:
+                      if config.get('Id') == notification_id:
+                          updated_lambda_configs.append(managed_lambda_config)
+                          replaced = True
+                      else:
+                          updated_lambda_configs.append(config)
+                  if not replaced:
+                      updated_lambda_configs.append(managed_lambda_config)
                   
                   notification_config = {
-                      'LambdaFunctionConfigurations': [
-                          {
-                              'LambdaFunctionArn': lambda_arn,
-                              'Events': ['s3:ObjectCreated:*'],
-                              'Filter': {
-                                  'Key': {
-                                      'FilterRules': [
-                                          {
-                                              'Name': 'suffix',
-                                              'Value': '.pdf'
-                                          }
-                                      ]
-                                  }
-                              }
-                          }
-                      ]
+                      'LambdaFunctionConfigurations': updated_lambda_configs
                   }
+                  
+                  if existing_config.get('TopicConfigurations'):
+                      notification_config['TopicConfigurations'] = existing_config['TopicConfigurations']
+                  if existing_config.get('QueueConfigurations'):
+                      notification_config['QueueConfigurations'] = existing_config['QueueConfigurations']
+                  if existing_config.get('EventBridgeConfiguration'):
+                      notification_config['EventBridgeConfiguration'] = existing_config['EventBridgeConfiguration']
                   
                   print(f"Putting notification on {bucket_name} for {lambda_arn}")
                   s3_client.put_bucket_notification_configuration(
@@ -368,12 +401,11 @@ Resources:
     Type: Custom::S3Notification
     DependsOn:
       - S3InvokePermission
-      - ConfigNotificationFunction
     Properties:
       ServiceToken: !GetAtt ConfigNotificationFunction.Arn
       BucketName: !Ref ResumeS3Bucket
       LambdaArn: !GetAtt ResumeAnalyzerFunction.Arn
-      FunctionVersion: "4"
+      FunctionVersion: "5"
 
 Outputs:
   ResumeBucketName:
