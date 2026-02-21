@@ -40,7 +40,20 @@ class TestStatusHandler:
                 "status": "completed",
                 "filename": "test-resume.pdf",
                 "created_at": "2025-11-22T17:00:00",
-                "analysis_result": "## Key Strengths\n- Python expert"
+                "analysis_result": {
+                    "name": "Jane Doe",
+                    "contact_info": {
+                        "email": "jane@example.com",
+                        "phone": "555-0100",
+                        "location": "Austin, TX",
+                        "linkedin": "https://linkedin.com/in/janedoe",
+                    },
+                    "summary": "Strong profile",
+                    "skills": ["Python"],
+                    "experience": [],
+                    "gaps": [],
+                    "recommendations": [],
+                },
             }
         }
 
@@ -53,7 +66,7 @@ class TestStatusHandler:
         assert body["job_id"] == "test-job-123"
         assert body["status"] == "completed"
         assert body["filename"] == "test-resume.pdf"
-        assert "Python expert" in body["analysis_result"]
+        assert body["analysis_result"]["name"] == "Jane Doe"
 
     def test_get_processing_job(
         self, status_handler_module, sample_status_event, mock_lambda_context, mock_boto3_clients
