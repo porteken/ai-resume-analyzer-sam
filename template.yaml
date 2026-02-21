@@ -22,9 +22,33 @@ Parameters:
     AllowedValues:
       - 'true'
       - 'false'
+  EnableBucketPublicAccessBlock:
+    Type: String
+    Description: Enable S3 public access block settings (requires s3:PutBucketPublicAccessBlock).
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  EnableBucketEncryption:
+    Type: String
+    Description: Enable S3 default encryption settings (requires s3:PutEncryptionConfiguration).
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  EnableBucketCors:
+    Type: String
+    Description: Enable S3 CORS settings (requires s3:PutBucketCORS).
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
 Conditions:
   UseBucketLifecycle: !Equals [!Ref EnableBucketLifecycle, 'true']
+  UseBucketPublicAccessBlock: !Equals [!Ref EnableBucketPublicAccessBlock, 'true']
+  UseBucketEncryption: !Equals [!Ref EnableBucketEncryption, 'true']
+  UseBucketCors: !Equals [!Ref EnableBucketCors, 'true']
 
 Resources:
   UploadFunctionLogGroup:
@@ -77,10 +101,12 @@ Resources:
   ResumeS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+      BucketEncryption: !If
+        - UseBucketEncryption
+        - ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        - !Ref 'AWS::NoValue'
       LifecycleConfiguration: !If
         - UseBucketLifecycle
         - Rules:
@@ -89,21 +115,25 @@ Resources:
               ExpirationInDays: 30
               Prefix: uploads/
         - !Ref 'AWS::NoValue'
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      CorsConfiguration:
-        CorsRules:
-          - AllowedOrigins:
-              - '*'
-            AllowedMethods:
-              - GET
-              - PUT
-              - POST
-            AllowedHeaders:
-              - '*'
+      PublicAccessBlockConfiguration: !If
+        - UseBucketPublicAccessBlock
+        - BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        - !Ref 'AWS::NoValue'
+      CorsConfiguration: !If
+        - UseBucketCors
+        - CorsRules:
+            - AllowedOrigins:
+                - '*'
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+              AllowedHeaders:
+                - '*'
+        - !Ref 'AWS::NoValue'
 
   ResumeAnalyzerApi:
     Type: AWS::Serverless::Api
