@@ -4,8 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - dev
-      - prd
+      - '**'
   workflow_dispatch:
 
 permissions:
@@ -51,7 +50,7 @@ jobs:
     name: Deploy
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/prd'))
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -79,18 +78,15 @@ jobs:
 
       - name: Resolve deployment target from branch
         run: |
-          if [[ "${GITHUB_REF}" == "refs/heads/dev" ]]; then
-            echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_DEV || 'ai-resume-analyzer-dev' }}" >> "$GITHUB_ENV"
-            echo "API_STAGE_NAME=dev" >> "$GITHUB_ENV"
-          elif [[ "${GITHUB_REF}" == "refs/heads/prd" ]]; then
+          if [[ "${GITHUB_REF}" == "refs/heads/prd" ]]; then
             echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_PROD || 'ai-resume-analyzer-prod' }}" >> "$GITHUB_ENV"
             echo "API_STAGE_NAME=prod" >> "$GITHUB_ENV"
           else
-            echo "Unsupported branch for deployment: ${GITHUB_REF}"
-            exit 1
+            echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_DEV || 'ai-resume-analyzer-dev' }}" >> "$GITHUB_ENV"
+            echo "API_STAGE_NAME=dev" >> "$GITHUB_ENV"
           fi
 
-      - name: Recover broken stack state (dev only)
+      - name: Recover broken stack state
         run: |
           set +e
           STACK_STATUS=$(aws cloudformation describe-stacks \
@@ -113,17 +109,57 @@ jobs:
 
           echo "Current stack status: $STACK_STATUS"
 
-          if [[ "$STACK_STATUS" == "ROLLBACK_FAILED" ]]; then
-            if [[ "$API_STAGE_NAME" != "dev" ]]; then
-              echo "Stack is in ROLLBACK_FAILED for non-dev stage. Manual recovery required."
-              exit 1
-            fi
+          case "$STACK_STATUS" in
+            ROLLBACK_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_FAILED)
+              echo "Stack is in a broken state ($STACK_STATUS). Attempting cleanup before deploy."
+              ;;
+            *)
+              echo "No stack recovery needed."
+              exit 0
+              ;;
+          esac
 
-            echo "Deleting broken dev stack $SAM_STACK_NAME..."
+          delete_and_wait() {
             aws cloudformation delete-stack --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+            set +e
             aws cloudformation wait stack-delete-complete --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+            WAIT_RC=$?
+            set -e
+            return "$WAIT_RC"
+          }
+
+          if delete_and_wait; then
             echo "Deleted broken stack. Deploy step will recreate it."
+            exit 0
           fi
+
+          echo "Initial stack delete failed. Attempting S3 bucket cleanup before retry..."
+          S3_BUCKETS=$(aws cloudformation describe-stack-resources \
+            --stack-name "$SAM_STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
+            --output text || true)
+
+          if [[ -n "$S3_BUCKETS" && "$S3_BUCKETS" != "None" ]]; then
+            for BUCKET in $S3_BUCKETS; do
+              echo "Emptying bucket $BUCKET..."
+              aws s3 rm "s3://$BUCKET" --recursive || true
+            done
+          fi
+
+          if delete_and_wait; then
+            echo "Deleted broken stack after S3 cleanup. Deploy step will recreate it."
+            exit 0
+          fi
+
+          echo "Stack cleanup failed after retry. Recent stack events:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$SAM_STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 20 \
+            --query "StackEvents[].{Time:Timestamp,Status:ResourceStatus,Type:ResourceType,LogicalId:LogicalResourceId,Reason:ResourceStatusReason}" \
+            --output table || true
+          exit 1
 
       - name: Build and deploy
         env:
