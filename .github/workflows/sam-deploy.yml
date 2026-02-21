@@ -90,6 +90,41 @@ jobs:
             exit 1
           fi
 
+      - name: Recover broken stack state (dev only)
+        run: |
+          set +e
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "$SAM_STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>&1)
+          DESCRIBE_RC=$?
+          set -e
+
+          if [[ $DESCRIBE_RC -ne 0 ]]; then
+            if [[ "$STACK_STATUS" == *"does not exist"* ]]; then
+              echo "Stack $SAM_STACK_NAME does not exist yet. Proceeding with create."
+              exit 0
+            fi
+            echo "Could not read stack status:"
+            echo "$STACK_STATUS"
+            exit 1
+          fi
+
+          echo "Current stack status: $STACK_STATUS"
+
+          if [[ "$STACK_STATUS" == "ROLLBACK_FAILED" ]]; then
+            if [[ "$API_STAGE_NAME" != "dev" ]]; then
+              echo "Stack is in ROLLBACK_FAILED for non-dev stage. Manual recovery required."
+              exit 1
+            fi
+
+            echo "Deleting broken dev stack $SAM_STACK_NAME..."
+            aws cloudformation delete-stack --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+            aws cloudformation wait stack-delete-complete --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+            echo "Deleted broken stack. Deploy step will recreate it."
+          fi
+
       - name: Build and deploy
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
