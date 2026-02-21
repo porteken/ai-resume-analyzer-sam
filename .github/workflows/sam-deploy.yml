@@ -18,6 +18,9 @@ concurrency:
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   ENABLE_BUCKET_LIFECYCLE: ${{ vars.ENABLE_BUCKET_LIFECYCLE || 'false' }}
+  ENABLE_BUCKET_PUBLIC_ACCESS_BLOCK: ${{ vars.ENABLE_BUCKET_PUBLIC_ACCESS_BLOCK || 'false' }}
+  ENABLE_BUCKET_ENCRYPTION: ${{ vars.ENABLE_BUCKET_ENCRYPTION || 'false' }}
+  ENABLE_BUCKET_CORS: ${{ vars.ENABLE_BUCKET_CORS || 'false' }}
 
 jobs:
   build:
@@ -193,7 +196,13 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           sam build --use-container --template template.yaml
-          PARAM_OVERRIDES=("ApiStageName=$API_STAGE_NAME" "EnableBucketLifecycle=$ENABLE_BUCKET_LIFECYCLE")
+          PARAM_OVERRIDES=(
+            "ApiStageName=$API_STAGE_NAME"
+            "EnableBucketLifecycle=$ENABLE_BUCKET_LIFECYCLE"
+            "EnableBucketPublicAccessBlock=$ENABLE_BUCKET_PUBLIC_ACCESS_BLOCK"
+            "EnableBucketEncryption=$ENABLE_BUCKET_ENCRYPTION"
+            "EnableBucketCors=$ENABLE_BUCKET_CORS"
+          )
           if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
           fi
