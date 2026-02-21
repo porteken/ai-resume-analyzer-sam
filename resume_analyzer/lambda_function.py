@@ -5,7 +5,6 @@ import logging
 import os
 import warnings
 from datetime import datetime
-from functools import lru_cache
 from typing import Any
 
 import boto3
@@ -18,11 +17,12 @@ logger = logging.getLogger(__name__)
 
 s3_client = boto3.client("s3")
 dynamodb: Any = boto3.resource("dynamodb")
-sts_client = boto3.client("sts")
 
 api_key = os.environ.get("GOOGLE_API_KEY")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
+ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
+results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
 EXPR_ATTR_STATUS = "#status"
 EXPR_VAL_STATUS = ":status"
@@ -42,27 +42,17 @@ if api_key:
     except Exception:
         logger.exception("ERROR initializing Gemini LLM")
 
-
-@lru_cache(maxsize=1)
-def get_aws_account_id() -> str:
-    """Fetches and caches AWS Account ID."""
-    try:
-        return sts_client.get_caller_identity()["Account"]
-    except Exception:
-        logger.exception("ERROR fetching Account ID")
-        return ""
-
-
 def read_pdf_from_bytes(pdf_bytes: bytes) -> str:
     """Reads a PDF from bytes and returns its text content."""
     try:
         with io.BytesIO(pdf_bytes) as file:
             pdf_reader = PdfReader(file)
-            text = ""
+            parts: list[str] = []
             for page in pdf_reader.pages:
                 page_text = page.extract_text()
                 if page_text:
-                    text += page_text
+                    parts.append(page_text)
+            text = "\n".join(parts)
             if not text:
                 return "Error: Could not extract text from the PDF."
             return text
@@ -73,12 +63,11 @@ def read_pdf_from_bytes(pdf_bytes: bytes) -> str:
 
 def read_pdf_from_s3(bucket_name: str, key: str) -> str:
     """Reads a PDF from S3 and returns text."""
-    account_id = get_aws_account_id()
     try:
         logger.info("Reading PDF from s3://%s/%s", bucket_name, key)
         kwargs = {"Bucket": bucket_name, "Key": key}
-        if account_id:
-            kwargs["ExpectedBucketOwner"] = account_id
+        if ACCOUNT_ID:
+            kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
 
         s3_object = s3_client.get_object(**kwargs)
         pdf_content = s3_object["Body"].read()
@@ -98,7 +87,6 @@ def save_pdf_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
         logger.error("ERROR: RESUME_BUCKET environment variable not set")
         return None
 
-    account_id = get_aws_account_id()
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         s3_key = f"uploads/{timestamp}_{filename}"
@@ -109,8 +97,8 @@ def save_pdf_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
             "Body": pdf_bytes,
             "ContentType": "application/pdf",
         }
-        if account_id:
-            kwargs["ExpectedBucketOwner"] = account_id
+        if ACCOUNT_ID:
+            kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
 
         s3_client.put_object(**kwargs)
         return s3_key
@@ -121,11 +109,10 @@ def save_pdf_to_s3(pdf_bytes: bytes, filename: str) -> str | None:
 
 def _get_s3_metadata(bucket: str, key: str) -> dict:
     """Retrieves metadata for a job from S3."""
-    account_id = get_aws_account_id()
     try:
         kwargs = {"Bucket": bucket, "Key": key}
-        if account_id:
-            kwargs["ExpectedBucketOwner"] = account_id
+        if ACCOUNT_ID:
+            kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
         return s3_client.head_object(**kwargs).get("Metadata", {})
     except Exception as e:
         logger.warning("WARNING: Could not get S3 metadata: %s", e)
@@ -139,11 +126,10 @@ def _update_job_status(
     error_msg: str | None = None,
 ) -> None:
     """Helper function to update job status in DynamoDB."""
-    if not job_id_param or not RESULTS_TABLE:
+    if not job_id_param or not results_table:
         return
 
     try:
-        table = dynamodb.Table(RESULTS_TABLE)
         update_expression = f"SET {EXPR_ATTR_STATUS} = {EXPR_VAL_STATUS}"
         expression_values = {EXPR_VAL_STATUS: status_value}
 
@@ -156,7 +142,7 @@ def _update_job_status(
             update_expression += f", error = {EXPR_VAL_ERROR}"
             expression_values[EXPR_VAL_ERROR] = error_msg
 
-        table.update_item(
+        results_table.update_item(
             Key={"job_id": job_id_param},
             UpdateExpression=update_expression,
             ExpressionAttributeNames={EXPR_ATTR_STATUS: "status"},

@@ -7,6 +7,7 @@ import boto3
 
 dynamodb = boto3.resource("dynamodb")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
+results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "body": json.dumps({"error": "Missing job_id in path"}),
             }
 
-        table = dynamodb.Table(RESULTS_TABLE)  # type: ignore[attr-defined]
-        response = table.get_item(Key={"job_id": job_id})
+        if not results_table:
+            raise RuntimeError("RESULTS_TABLE environment variable not configured")
+
+        response = results_table.get_item(Key={"job_id": job_id})
 
         if "Item" not in response:
             return {

@@ -4,29 +4,19 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from functools import lru_cache
 from typing import Any
 
 import boto3
 
 s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
-sts_client = boto3.client("sts")
 
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
+ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
+results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
 logger = logging.getLogger(__name__)
-
-
-@lru_cache(maxsize=1)
-def get_aws_account_id() -> str:
-    """Fetches and caches the AWS Account ID."""
-    try:
-        return sts_client.get_caller_identity()["Account"]
-    except Exception:
-        logger.exception("ERROR fetching Account ID")
-        return ""
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -71,7 +61,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         safe_job_description = job_description.replace("\n", " ").replace("\r", " ").strip()
         safe_filename = filename.replace("\n", " ").replace("\r", " ").strip()
 
-        account_id = get_aws_account_id()
         kwargs = {
             "Bucket": RESUME_BUCKET,
             "Key": s3_key,
@@ -83,13 +72,15 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "filename": safe_filename[:256],
             },
         }
-        if account_id:
-            kwargs["ExpectedBucketOwner"] = account_id
+        if ACCOUNT_ID:
+            kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
 
         s3_client.put_object(**kwargs)
 
-        table = dynamodb.Table(RESULTS_TABLE)  # type: ignore[attr-defined]
-        table.put_item(
+        if not results_table:
+            raise RuntimeError("RESULTS_TABLE environment variable not configured")
+
+        results_table.put_item(
             Item={
                 "job_id": job_id,
                 "status": "processing",

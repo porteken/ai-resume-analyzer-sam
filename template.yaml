@@ -147,6 +147,7 @@ Resources:
         Variables:
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
+          AWS_ACCOUNT_ID: !Ref 'AWS::AccountId'
           PYTHONUNBUFFERED: '1'
       Events:
         UploadApi:
@@ -194,7 +195,7 @@ Resources:
       Handler: lambda_function.lambda_handler
       Runtime: python3.11
       Timeout: 60
-      MemorySize: 248
+      MemorySize: 512
       ReservedConcurrentExecutions: 10
       EphemeralStorage:
         Size: 512
@@ -212,9 +213,9 @@ Resources:
           GOOGLE_API_KEY: !Ref GoogleApiKey
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
+          AWS_ACCOUNT_ID: !Ref 'AWS::AccountId'
           AWS_LAMBDA_LOG_LEVEL: WARN
           PYTHONUNBUFFERED: '1'
-          CREWAI_TELEMETRY_OPT_OUT: 'true'
       Events:
         AnalyzeResumeApi:
           Type: Api

@@ -14,6 +14,7 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key-123")
     monkeypatch.setenv("RESUME_BUCKET", "test-resume-bucket")
     monkeypatch.setenv("RESULTS_TABLE", "test-results-table")
+    monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
 
@@ -22,10 +23,6 @@ def mock_boto3_clients() -> dict[str, Any]:
     """Mock all boto3 clients and resources."""
     mock_s3_client = MagicMock()
     mock_dynamodb = MagicMock()
-    mock_sts_client = MagicMock()
-
-
-    mock_sts_client.get_caller_identity.return_value = {"Account": "123456789012"}
 
 
     mock_s3_client.get_object.return_value = {
@@ -57,7 +54,6 @@ def mock_boto3_clients() -> dict[str, Any]:
     return {
         "s3": mock_s3_client,
         "dynamodb": mock_dynamodb,
-        "sts": mock_sts_client,
         "dynamodb_table": mock_table,
     }
 

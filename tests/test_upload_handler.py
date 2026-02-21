@@ -20,18 +20,21 @@ def upload_handler_module(mock_boto3_clients) -> Any:
 
     original_s3 = upload_handler.s3_client
     original_dynamodb = upload_handler.dynamodb
-    original_sts = upload_handler.sts_client
+    original_results_table = upload_handler.results_table
+    original_account_id = upload_handler.ACCOUNT_ID
 
     upload_handler.s3_client = mock_boto3_clients["s3"]
     upload_handler.dynamodb = mock_boto3_clients["dynamodb"]
-    upload_handler.sts_client = mock_boto3_clients["sts"]
+    upload_handler.results_table = mock_boto3_clients["dynamodb_table"]
+    upload_handler.ACCOUNT_ID = "123456789012"
 
     try:
         yield upload_handler
     finally:
         upload_handler.s3_client = original_s3
         upload_handler.dynamodb = original_dynamodb
-        upload_handler.sts_client = original_sts
+        upload_handler.results_table = original_results_table
+        upload_handler.ACCOUNT_ID = original_account_id
 
 
 @pytest.mark.integration
@@ -58,6 +61,7 @@ class TestUploadHandler:
         assert call_args["Bucket"] == "test-resume-bucket"
         assert call_args["ContentType"] == "application/pdf"
         assert "uploads/" in call_args["Key"]
+        assert call_args["ExpectedBucketOwner"] == "123456789012"
 
         mock_boto3_clients["dynamodb_table"].put_item.assert_called_once()
         item_args = mock_boto3_clients["dynamodb_table"].put_item.call_args[1]["Item"]
