@@ -19,11 +19,13 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
 
     original_s3 = lambda_function.s3_client
     original_dynamodb = lambda_function.dynamodb
-    original_sts = lambda_function.sts_client
+    original_results_table = lambda_function.results_table
+    original_account_id = lambda_function.ACCOUNT_ID
 
     lambda_function.s3_client = mock_boto3_clients["s3"]
     lambda_function.dynamodb = mock_boto3_clients["dynamodb"]
-    lambda_function.sts_client = mock_boto3_clients["sts"]
+    lambda_function.results_table = mock_boto3_clients["dynamodb_table"]
+    lambda_function.ACCOUNT_ID = "123456789012"
 
     mock_llm = MagicMock()
     mock_response = MagicMock()
@@ -39,13 +41,12 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     try:
 
         lambda_function.api_key = "test-api-key-123"
-
-        lambda_function.get_aws_account_id.cache_clear()
         yield lambda_function
     finally:
         lambda_function.s3_client = original_s3
         lambda_function.dynamodb = original_dynamodb
-        lambda_function.sts_client = original_sts
+        lambda_function.results_table = original_results_table
+        lambda_function.ACCOUNT_ID = original_account_id
         lambda_function.gemini_llm = original_gemini
 
 
@@ -87,6 +88,8 @@ class TestReadPDF:
         assert isinstance(result, str)
         assert len(result.strip()) > 0
         assert "error" not in result.lower()
+        call_args = mock_boto3_clients["s3"].get_object.call_args[1]
+        assert call_args["ExpectedBucketOwner"] == "123456789012"
 
     def test_read_pdf_from_s3_not_found(self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]) -> None:
         """Test PDF reading when file doesn't exist in S3."""
@@ -163,6 +166,7 @@ class TestS3Operations:
         call_args = mock_boto3_clients["s3"].put_object.call_args[1]
         assert call_args["ContentType"] == "application/pdf"
         assert call_args["Bucket"] == "test-resume-bucket"
+        assert call_args["ExpectedBucketOwner"] == "123456789012"
 
     def test_save_pdf_to_s3_no_bucket(self, lambda_function_module, monkeypatch) -> None:
         """Test save PDF when bucket env var is not set."""
@@ -191,6 +195,8 @@ class TestS3Operations:
 
         assert result["job_id"] == "123"
         assert result["job_description"] == "Test job"
+        call_args = mock_boto3_clients["s3"].head_object.call_args[1]
+        assert call_args["ExpectedBucketOwner"] == "123456789012"
 
     def test_get_s3_metadata_error(self, lambda_function_module, mock_boto3_clients) -> None:
         """Test S3 metadata retrieval with error."""
@@ -471,31 +477,22 @@ class TestLambdaHandler:
 class TestUtilityFunctions:
     """Test suite for utility functions."""
 
-    def test_get_aws_account_id_success(self, lambda_function_module, mock_boto3_clients) -> None:
-        """Test successful account ID retrieval."""
-        lambda_function_module.get_aws_account_id.cache_clear()
+    def test_expected_bucket_owner_omitted_without_account_id(
+        self, lambda_function_module, mock_boto3_clients, sample_pdf_base64
+    ) -> None:
+        """Test S3 calls omit ExpectedBucketOwner when account ID is not configured."""
+        original_account_id = lambda_function_module.ACCOUNT_ID
+        lambda_function_module.ACCOUNT_ID = ""
+        pdf_bytes = base64.b64decode(sample_pdf_base64)
+        mock_boto3_clients["s3"].get_object.return_value = {"Body": Mock(read=lambda: pdf_bytes)}
 
-        account_id = lambda_function_module.get_aws_account_id()
+        try:
+            lambda_function_module.read_pdf_from_s3("test-bucket", "test-key.pdf")
+            lambda_function_module.save_pdf_to_s3(b"test", "test.pdf")
+            lambda_function_module._get_s3_metadata("test-bucket", "test-key.pdf")
+        finally:
+            lambda_function_module.ACCOUNT_ID = original_account_id
 
-        assert account_id == "123456789012"
-
-    def test_get_aws_account_id_error(self, lambda_function_module, mock_boto3_clients) -> None:
-        """Test account ID retrieval with error."""
-        lambda_function_module.get_aws_account_id.cache_clear()
-
-        mock_boto3_clients["sts"].get_caller_identity.side_effect = Exception("STS error")
-
-        account_id = lambda_function_module.get_aws_account_id()
-
-        assert account_id == ""
-
-    def test_get_aws_account_id_caching(self, lambda_function_module, mock_boto3_clients) -> None:
-        """Test that account ID is cached."""
-        lambda_function_module.get_aws_account_id.cache_clear()
-
-        id1 = lambda_function_module.get_aws_account_id()
-        id2 = lambda_function_module.get_aws_account_id()
-
-        assert id1 == id2
-
-        assert mock_boto3_clients["sts"].get_caller_identity.call_count == 1
+        assert "ExpectedBucketOwner" not in mock_boto3_clients["s3"].get_object.call_args[1]
+        assert "ExpectedBucketOwner" not in mock_boto3_clients["s3"].put_object.call_args[1]
+        assert "ExpectedBucketOwner" not in mock_boto3_clients["s3"].head_object.call_args[1]

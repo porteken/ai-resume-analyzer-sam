@@ -14,12 +14,15 @@ def status_handler_module(mock_boto3_clients) -> Any:
 
 
     original_dynamodb = status_handler.dynamodb
+    original_results_table = status_handler.results_table
     status_handler.dynamodb = mock_boto3_clients["dynamodb"]
+    status_handler.results_table = mock_boto3_clients["dynamodb_table"]
 
     try:
         yield status_handler
     finally:
         status_handler.dynamodb = original_dynamodb
+        status_handler.results_table = original_results_table
 
 
 @pytest.mark.integration
