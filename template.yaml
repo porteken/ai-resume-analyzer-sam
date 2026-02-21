@@ -8,6 +8,13 @@ Parameters:
     Type: String
     Description: Your Google API Key for the Gemini model.
     NoEcho: true
+  ApiStageName:
+    Type: String
+    Description: API Gateway stage name for this environment.
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
 
 Resources:
   UploadFunctionLogGroup:
@@ -89,7 +96,7 @@ Resources:
   ResumeAnalyzerApi:
     Type: AWS::Serverless::Api
     Properties:
-      StageName: prod
+      StageName: !Ref ApiStageName
       Auth:
         ApiKeyRequired: false
       MethodSettings:
@@ -229,21 +236,21 @@ Resources:
   ResumeAnalyzerApiKey:
     Type: AWS::ApiGateway::ApiKey
     Properties:
-      Name: ResumeAnalyzerApiKey
+      Name: !Sub '${AWS::StackName}-ApiKey'
       Description: API Key for Resume Analyzer
       Enabled: true
       StageKeys:
         - RestApiId: !Ref ResumeAnalyzerApi
-          StageName: prod
+          StageName: !Ref ApiStageName
 
   ResumeAnalyzerUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     Properties:
-      UsagePlanName: ResumeAnalyzerUsagePlan
+      UsagePlanName: !Sub '${AWS::StackName}-UsagePlan'
       Description: Usage plan for Resume Analyzer API
       ApiStages:
         - ApiId: !Ref ResumeAnalyzerApi
-          Stage: prod
+          Stage: !Ref ApiStageName
       Throttle:
         BurstLimit: 100
         RateLimit: 50
@@ -419,11 +426,11 @@ Outputs:
   
   UploadEndpoint:
     Description: "API Gateway upload endpoint URL"
-    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/upload"
+    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload"
 
   StatusEndpoint:
     Description: "API Gateway status endpoint URL"
-    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/prod/status/{job_id}"
+    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}"
 
   ApiKeyId:
     Description: "API Key ID"
