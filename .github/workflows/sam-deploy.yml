@@ -17,6 +17,7 @@ concurrency:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ENABLE_BUCKET_LIFECYCLE: ${{ vars.ENABLE_BUCKET_LIFECYCLE || 'false' }}
 
 jobs:
   build:
@@ -192,7 +193,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           sam build --use-container --template template.yaml
-          PARAM_OVERRIDES=("ApiStageName=$API_STAGE_NAME")
+          PARAM_OVERRIDES=("ApiStageName=$API_STAGE_NAME" "EnableBucketLifecycle=$ENABLE_BUCKET_LIFECYCLE")
           if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
           fi

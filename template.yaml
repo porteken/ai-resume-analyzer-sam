@@ -15,6 +15,16 @@ Parameters:
     AllowedValues:
       - dev
       - prod
+  EnableBucketLifecycle:
+    Type: String
+    Description: Enable S3 lifecycle expiration for uploaded resumes (requires s3:PutLifecycleConfiguration).
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  UseBucketLifecycle: !Equals [!Ref EnableBucketLifecycle, 'true']
 
 Resources:
   UploadFunctionLogGroup:
@@ -71,12 +81,14 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-      LifecycleConfiguration:
-        Rules:
-          - Id: ExpireUploadedResumes
-            Status: Enabled
-            ExpirationInDays: 30
-            Prefix: uploads/
+      LifecycleConfiguration: !If
+        - UseBucketLifecycle
+        - Rules:
+            - Id: ExpireUploadedResumes
+              Status: Enabled
+              ExpirationInDays: 30
+              Prefix: uploads/
+        - !Ref 'AWS::NoValue'
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
