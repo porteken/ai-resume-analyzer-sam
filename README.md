@@ -2,6 +2,28 @@
 
 Backend for AI resume analyzer hosted [here](https://ai-resume-analyzer-app-lake.vercel.app/) using CrewAI and Google Gemini.
 
+## GitHub Actions CI/CD (SAM)
+
+This repo includes `.github/workflows/sam-deploy.yml` to build and deploy the SAM stack.
+
+### Required GitHub Secrets
+
+- `AWS_ROLE_TO_ASSUME`: IAM role ARN trusted for GitHub OIDC and authorized to deploy the stack.
+- `GOOGLE_API_KEY`: Optional. Used for first-time stack creation or parameter updates. If omitted, deploy uses the existing CloudFormation parameter value.
+
+### Optional GitHub Variables
+
+- `AWS_REGION` (default: `us-east-1`)
+- `SAM_STACK_NAME_DEV` (default: `ai-resume-analyzer-dev`)
+- `SAM_STACK_NAME_PROD` (default: `ai-resume-analyzer-prod`)
+
+### Trigger behavior
+
+- Pull requests: build/validate only.
+- Push to `dev`: build + deploy to dev stack with API stage `dev`.
+- Push to `prd`: build + deploy to prod stack with API stage `prod`.
+- Manual run (`workflow_dispatch`): build + deploy using the selected branch (`dev` or `prd`).
+
 ## API Endpoints
 
 ### POST /upload
@@ -43,4 +65,3 @@ curl $API_ENDPOINT/status/JOB_ID \
   "analysis_result": "## Resume Analysis\n\n### Met Requirements\n..."
 }
 ```
-
