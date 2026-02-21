@@ -1,79 +1,48 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  An AI Resume Analyzer with Lambda Layers and API Gateway that accepts PDF file uploads.
+Description: AI Resume Analyzer using S3 presigned uploads and Gemini 3 Flash multimodal PDF analysis.
 
 Parameters:
   GoogleApiKey:
     Type: String
-    Description: Your Google API Key for the Gemini model.
     NoEcho: true
+    Description: Google Gemini API key.
   ApiStageName:
     Type: String
-    Description: API Gateway stage name for this environment.
     Default: prod
     AllowedValues:
       - dev
       - prod
-  EnableBucketLifecycle:
+  AllowedOrigin:
     Type: String
-    Description: Enable S3 lifecycle expiration for uploaded resumes (requires s3:PutLifecycleConfiguration).
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-  EnableBucketPublicAccessBlock:
-    Type: String
-    Description: Enable S3 public access block settings (requires s3:PutBucketPublicAccessBlock).
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-  EnableBucketEncryption:
-    Type: String
-    Description: Enable S3 default encryption settings (requires s3:PutEncryptionConfiguration).
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-  EnableBucketCors:
-    Type: String
-    Description: Enable S3 CORS settings (requires s3:PutBucketCORS).
-    Default: 'false'
-    AllowedValues:
-      - 'true'
-      - 'false'
-
-Conditions:
-  UseBucketLifecycle: !Equals [!Ref EnableBucketLifecycle, 'true']
-  UseBucketPublicAccessBlock: !Equals [!Ref EnableBucketPublicAccessBlock, 'true']
-  UseBucketEncryption: !Equals [!Ref EnableBucketEncryption, 'true']
-  UseBucketCors: !Equals [!Ref EnableBucketCors, 'true']
+    Default: https://app.example.com
+    Description: Frontend origin allowed by API and S3 CORS.
 
 Resources:
-  UploadFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
+  ResumeS3Bucket:
+    Type: AWS::S3::Bucket
     Properties:
-      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-UploadFunction'
-      RetentionInDays: 7
-
-  StatusFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-StatusFunction'
-      RetentionInDays: 7
-
-  ResumeAnalyzerFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-ResumeAnalyzerFunction'
-      RetentionInDays: 14
-
-  ConfigNotificationFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-ConfigNotificationFunction'
-      RetentionInDays: 3
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref AllowedOrigin
+            AllowedMethods:
+              - POST
+              - GET
+            AllowedHeaders:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 300
 
   ResultsTable:
     Type: AWS::DynamoDB::Table
@@ -89,104 +58,38 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
-  DependenciesLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: resume-analyzer-dependencies
-      Description: Python dependencies for resume analyzer
-      ContentUri: layers/dependencies/
-      CompatibleRuntimes:
-        - python3.11
-
-  ResumeS3Bucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketEncryption: !If
-        - UseBucketEncryption
-        - ServerSideEncryptionConfiguration:
-            - ServerSideEncryptionByDefault:
-                SSEAlgorithm: AES256
-        - !Ref 'AWS::NoValue'
-      LifecycleConfiguration: !If
-        - UseBucketLifecycle
-        - Rules:
-            - Id: ExpireUploadedResumes
-              Status: Enabled
-              ExpirationInDays: 30
-              Prefix: uploads/
-        - !Ref 'AWS::NoValue'
-      PublicAccessBlockConfiguration: !If
-        - UseBucketPublicAccessBlock
-        - BlockPublicAcls: true
-          BlockPublicPolicy: true
-          IgnorePublicAcls: true
-          RestrictPublicBuckets: true
-        - !Ref 'AWS::NoValue'
-      CorsConfiguration: !If
-        - UseBucketCors
-        - CorsRules:
-            - AllowedOrigins:
-                - '*'
-              AllowedMethods:
-                - GET
-                - PUT
-                - POST
-              AllowedHeaders:
-                - '*'
-        - !Ref 'AWS::NoValue'
-
   ResumeAnalyzerApi:
     Type: AWS::Serverless::Api
     Properties:
       StageName: !Ref ApiStageName
-      Auth:
-        ApiKeyRequired: false
-      MethodSettings:
-        - ResourcePath: '/*'
-          HttpMethod: '*'
-          ThrottlingBurstLimit: 100
-          ThrottlingRateLimit: 50
-      BinaryMediaTypes:
-        - 'application/pdf'
-        - 'multipart/form-data'
-      Cors:
-        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
-        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token'"
-        AllowOrigin: "'*'"
-        AllowCredentials: false
-        MaxAge: "'600'"
       OpenApiVersion: '3.0.1'
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
+        AllowOrigin: !Sub "'${AllowedOrigin}'"
       GatewayResponses:
         DEFAULT_4XX:
           ResponseParameters:
             Headers:
-              Access-Control-Allow-Origin: "'*'"
-              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
         DEFAULT_5XX:
           ResponseParameters:
             Headers:
-              Access-Control-Allow-Origin: "'*'"
-              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-        UNAUTHORIZED:
-          ResponseParameters:
-            Headers:
-              Access-Control-Allow-Origin: "'*'"
-              Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key,X-Amz-Security-Token'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
 
-  UploadFunction:
+  PresignedUploadFunction:
     Type: AWS::Serverless::Function
-    DependsOn: UploadFunctionLogGroup
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-UploadFunction'
+      FunctionName: !Sub '${AWS::StackName}-PresignedUploadFunction'
       CodeUri: resume_analyzer/
       Handler: upload_handler.lambda_handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 512
-      ReservedConcurrentExecutions: 20
+      Timeout: 10
+      MemorySize: 128
       Policies:
         - S3WritePolicy:
             BucketName: !Ref ResumeS3Bucket
@@ -196,8 +99,9 @@ Resources:
         Variables:
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
-          AWS_ACCOUNT_ID: !Ref 'AWS::AccountId'
-          PYTHONUNBUFFERED: '1'
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
+          UPLOAD_EXPIRES_SECONDS: '900'
       Events:
         UploadApi:
           Type: Api
@@ -205,25 +109,53 @@ Resources:
             RestApiId: !Ref ResumeAnalyzerApi
             Path: /upload
             Method: POST
-            Auth:
-              ApiKeyRequired: true
+
+  AnalyzeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-AnalyzeFunction'
+      CodeUri: resume_analyzer/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 384
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ResumeS3Bucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResultsTable
+      Environment:
+        Variables:
+          GOOGLE_API_KEY: !Ref GoogleApiKey
+          GEMINI_MODEL_ID: gemini-3-flash-preview
+          RESUME_BUCKET: !Ref ResumeS3Bucket
+          RESULTS_TABLE: !Ref ResultsTable
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
+      Events:
+        AnalyzeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /analyze
+            Method: POST
 
   StatusFunction:
     Type: AWS::Serverless::Function
-    DependsOn: StatusFunctionLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-StatusFunction'
       CodeUri: resume_analyzer/
       Handler: status_handler.lambda_handler
       Runtime: python3.11
-      Timeout: 10
-      MemorySize: 256
+      Timeout: 5
+      MemorySize: 128
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref ResultsTable
       Environment:
         Variables:
           RESULTS_TABLE: !Ref ResultsTable
+          CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
       Events:
         StatusApi:
           Type: Api
@@ -231,248 +163,17 @@ Resources:
             RestApiId: !Ref ResumeAnalyzerApi
             Path: /status/{job_id}
             Method: GET
-            Auth:
-              ApiKeyRequired: true
-
-  ResumeAnalyzerFunction:
-    Type: AWS::Serverless::Function
-    DependsOn: ResumeAnalyzerFunctionLogGroup
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-ResumeAnalyzerFunction'
-      Description: "Ultra-optimized resume analyzer with direct LLM calls - v3.0"
-      CodeUri: resume_analyzer/
-      Handler: lambda_function.lambda_handler
-      Runtime: python3.11
-      Timeout: 60
-      MemorySize: 512
-      ReservedConcurrentExecutions: 10
-      EphemeralStorage:
-        Size: 512
-      Layers:
-        - !Ref DependenciesLayer
-      Policies:
-        - S3ReadPolicy:
-            BucketName: !Ref ResumeS3Bucket
-        - S3WritePolicy:
-            BucketName: !Ref ResumeS3Bucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref ResultsTable
-      Environment:
-        Variables:
-          GOOGLE_API_KEY: !Ref GoogleApiKey
-          RESUME_BUCKET: !Ref ResumeS3Bucket
-          RESULTS_TABLE: !Ref ResultsTable
-          AWS_ACCOUNT_ID: !Ref 'AWS::AccountId'
-          AWS_LAMBDA_LOG_LEVEL: WARN
-          PYTHONUNBUFFERED: '1'
-      Events:
-        AnalyzeResumeApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ResumeAnalyzerApi
-            Path: /analyze
-            Method: POST
-            Auth:
-              ApiKeyRequired: true
-
-  ResumeAnalyzerApiKey:
-    Type: AWS::ApiGateway::ApiKey
-    DependsOn: ResumeAnalyzerApiStage
-    Properties:
-      Name: !Sub '${AWS::StackName}-ApiKey'
-      Description: API Key for Resume Analyzer
-      Enabled: true
-
-  ResumeAnalyzerUsagePlan:
-    Type: AWS::ApiGateway::UsagePlan
-    DependsOn: ResumeAnalyzerApiStage
-    Properties:
-      UsagePlanName: !Sub '${AWS::StackName}-UsagePlan'
-      Description: Usage plan for Resume Analyzer API
-      ApiStages:
-        - ApiId: !Ref ResumeAnalyzerApi
-          Stage: !Ref ApiStageName
-      Throttle:
-        BurstLimit: 100
-        RateLimit: 50
-      Quota:
-        Limit: 10000
-        Period: MONTH
-
-  ResumeAnalyzerUsagePlanKey:
-    Type: AWS::ApiGateway::UsagePlanKey
-    Properties:
-      KeyId: !Ref ResumeAnalyzerApiKey
-      KeyType: API_KEY
-      UsagePlanId: !Ref ResumeAnalyzerUsagePlan
-
-  
-  S3InvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref ResumeAnalyzerFunction
-      Action: 'lambda:InvokeFunction'
-      Principal: 's3.amazonaws.com'
-      SourceArn: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
-
-  ConfigNotificationFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
-      Policies:
-        - PolicyName: S3NotificationPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - 's3:GetBucketNotification'
-                  - 's3:PutBucketNotification'
-                Resource: !Sub 'arn:aws:s3:::${ResumeS3Bucket}'
-
-  ConfigNotificationFunction:
-    Type: AWS::Lambda::Function
-    DependsOn: ConfigNotificationFunctionLogGroup
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-ConfigNotificationFunction'
-      Runtime: python3.11
-      Role: !GetAtt ConfigNotificationFunctionRole.Arn
-      Handler: index.lambda_handler
-      Timeout: 30
-      Code:
-        ZipFile: |
-          import boto3
-          import json
-          import urllib3
-          
-          http = urllib3.PoolManager()
-          s3_client = boto3.client('s3')
-          
-          def send(event, context, responseStatus, responseData, physicalResourceId=None, noEcho=False, reason=None):
-              responseUrl = event['ResponseURL']
-              print(responseUrl)
-              responseBody = {
-                  'Status': responseStatus,
-                  'Reason': reason or "See the details in CloudWatch Log Stream: {}".format(context.log_stream_name),
-                  'PhysicalResourceId': physicalResourceId or context.log_stream_name,
-                  'StackId': event['StackId'],
-                  'RequestId': event['RequestId'],
-                  'LogicalResourceId': event['LogicalResourceId'],
-                  'NoEcho': noEcho,
-                  'Data': responseData
-              }
-              json_responseBody = json.dumps(responseBody)
-              headers = {
-                  'content-type': '',
-                  'content-length': str(len(json_responseBody))
-              }
-              try:
-                  response = http.request('PUT', responseUrl, body=json_responseBody, headers=headers)
-                  print("Status code:", response.status)
-              except Exception as e:
-                  print("send(..) failed executing http.request(..):", e)
-
-          def lambda_handler(event, context):
-              print("Received event:")
-              print(json.dumps(event))
-              try:
-                  if event['RequestType'] == 'Delete':
-                      print("Delete request received. Skipping S3 config wipe to preserve replacement resource settings.")
-                      send(event, context, "SUCCESS", {})
-                      return
-                  
-                  bucket_name = event['ResourceProperties']['BucketName']
-                  lambda_arn = event['ResourceProperties']['LambdaArn']
-                  notification_id = 'resume-analyzer-pdf-created'
-                  
-                  existing_config = s3_client.get_bucket_notification_configuration(Bucket=bucket_name)
-                  lambda_configs = existing_config.get('LambdaFunctionConfigurations', [])
-                  
-                  managed_lambda_config = {
-                      'Id': notification_id,
-                      'LambdaFunctionArn': lambda_arn,
-                      'Events': ['s3:ObjectCreated:*'],
-                      'Filter': {
-                          'Key': {
-                              'FilterRules': [
-                                  {
-                                      'Name': 'suffix',
-                                      'Value': '.pdf'
-                                  }
-                              ]
-                          }
-                      }
-                  }
-                  
-                  updated_lambda_configs = []
-                  replaced = False
-                  for config in lambda_configs:
-                      if config.get('Id') == notification_id:
-                          updated_lambda_configs.append(managed_lambda_config)
-                          replaced = True
-                      else:
-                          updated_lambda_configs.append(config)
-                  if not replaced:
-                      updated_lambda_configs.append(managed_lambda_config)
-                  
-                  notification_config = {
-                      'LambdaFunctionConfigurations': updated_lambda_configs
-                  }
-                  
-                  if existing_config.get('TopicConfigurations'):
-                      notification_config['TopicConfigurations'] = existing_config['TopicConfigurations']
-                  if existing_config.get('QueueConfigurations'):
-                      notification_config['QueueConfigurations'] = existing_config['QueueConfigurations']
-                  if existing_config.get('EventBridgeConfiguration'):
-                      notification_config['EventBridgeConfiguration'] = existing_config['EventBridgeConfiguration']
-                  
-                  print(f"Putting notification on {bucket_name} for {lambda_arn}")
-                  s3_client.put_bucket_notification_configuration(
-                      Bucket=bucket_name,
-                      NotificationConfiguration=notification_config
-                  )
-                  
-                  send(event, context, "SUCCESS", {})
-              except Exception as e:
-                  print(f"Error: {str(e)}")
-                  send(event, context, "FAILED", {}, reason=str(e))
-
-  
-  ConfigureS3NotificationV2:
-    Type: Custom::S3Notification
-    DependsOn:
-      - S3InvokePermission
-    Properties:
-      ServiceToken: !GetAtt ConfigNotificationFunction.Arn
-      BucketName: !Ref ResumeS3Bucket
-      LambdaArn: !GetAtt ResumeAnalyzerFunction.Arn
-      FunctionVersion: "5"
 
 Outputs:
   ResumeBucketName:
-    Description: "Name of the S3 bucket to upload resumes to."
+    Description: S3 bucket for uploaded resumes
     Value: !Ref ResumeS3Bucket
-  
-  ResumeBucketArn:
-    Description: "ARN of the S3 bucket."
-    Value: !GetAtt ResumeS3Bucket.Arn
-  
   UploadEndpoint:
-    Description: "API Gateway upload endpoint URL"
-    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload"
-
+    Description: Endpoint to request a presigned S3 upload POST
+    Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
+  AnalyzeEndpoint:
+    Description: Endpoint to trigger Gemini resume analysis
+    Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
   StatusEndpoint:
-    Description: "API Gateway status endpoint URL"
-    Value: !Sub "https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}"
-
-  ApiKeyId:
-    Description: "API Key ID"
-    Value: !Ref ResumeAnalyzerApiKey
+    Description: Endpoint to fetch analysis status by job ID
+    Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}

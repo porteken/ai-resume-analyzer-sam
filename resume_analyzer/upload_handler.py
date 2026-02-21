@@ -1,8 +1,9 @@
-import base64
 import json
 import logging
 import os
+import re
 import uuid
+import base64
 from datetime import datetime
 from typing import Any
 
@@ -14,112 +15,119 @@ dynamodb = boto3.resource("dynamodb")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
-results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
+UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 
+results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 logger = logging.getLogger(__name__)
 
 
+PDF_CONTENT_TYPE = "application/pdf"
+
+
+def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+        },
+        "body": json.dumps(payload),
+    }
+
+
+def _sanitize_filename(filename: str) -> str:
+    base = os.path.basename(filename).strip() or "resume.pdf"
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", base)
+    if not safe.lower().endswith(".pdf"):
+        safe += ".pdf"
+    return safe[:256]
+
+
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Upload handler that accepts a PDF, saves to S3, and returns a job ID."""
-    logger.info("Upload handler invoked: %s", json.dumps(event, default=str)[:500])
+    """Creates an S3 presigned POST for direct PDF upload."""
+    logger.info("Upload handler invoked")
+
+    if not RESUME_BUCKET:
+        return _response(500, {"error": "RESUME_BUCKET environment variable not configured"})
+
+    if not results_table:
+        return _response(500, {"error": "RESULTS_TABLE environment variable not configured"})
+
+    if "body" not in event:
+        return _response(400, {"error": "No body in request"})
 
     try:
-        if "body" not in event:
-            return {
-                "statusCode": 400,
-                "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-                "body": json.dumps({"error": "No body in request"}),
-            }
-
         body = event.get("body", "")
-        is_base64 = event.get("isBase64Encoded", False)
+        if event.get("isBase64Encoded", False):
+            body = base64.b64decode(body).decode("utf-8")
+        if isinstance(body, str):
+            body = json.loads(body)
 
-        if is_base64:
-            body = base64.b64decode(body)
+        if not isinstance(body, dict):
+            return _response(400, {"error": "Invalid JSON body"})
 
-        if isinstance(body, bytes):
-            body = body.decode("utf-8")
-
-        body_json = json.loads(body)
-
-        if "pdf_base64" not in body_json:
-            return {
-                "statusCode": 400,
-                "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-                "body": json.dumps({"error": "Missing required field: pdf_base64"}),
-            }
-
-        job_description = body_json.get("job_description", "General resume analysis")
-        filename = body_json.get("filename", "resume.pdf")
-
-        pdf_bytes = base64.b64decode(body_json["pdf_base64"])
+        filename = _sanitize_filename(str(body.get("filename", "resume.pdf")))
+        job_description = str(body.get("job_description", "General resume analysis")).strip()
 
         job_id = str(uuid.uuid4())
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        s3_key = f"uploads/{timestamp}_{job_id}_{filename}"
+        s3_key = f"uploads/{job_id}/{filename}"
 
-        safe_job_description = job_description.replace("\n", " ").replace("\r", " ").strip()
-        safe_filename = filename.replace("\n", " ").replace("\r", " ").strip()
+        fields = {
+            "Content-Type": PDF_CONTENT_TYPE,
+            "x-amz-meta-job_id": job_id,
+            "x-amz-meta-filename": filename,
+        }
+        conditions: list[Any] = [
+            {"Content-Type": PDF_CONTENT_TYPE},
+            {"x-amz-meta-job_id": job_id},
+            {"x-amz-meta-filename": filename},
+            ["content-length-range", 1, MAX_UPLOAD_BYTES],
+        ]
 
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "Bucket": RESUME_BUCKET,
             "Key": s3_key,
-            "Body": pdf_bytes,
-            "ContentType": "application/pdf",
-            "Metadata": {
-                "job_id": job_id,
-                "job_description": safe_job_description[:2000],
-                "filename": safe_filename[:256],
-            },
+            "Fields": fields,
+            "Conditions": conditions,
+            "ExpiresIn": UPLOAD_EXPIRES_SECONDS,
         }
         if ACCOUNT_ID:
             kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
 
-        s3_client.put_object(**kwargs)
+        presigned_post = s3_client.generate_presigned_post(**kwargs)
 
-        if not results_table:
-            raise RuntimeError("RESULTS_TABLE environment variable not configured")
-
+        now = datetime.utcnow()
         results_table.put_item(
             Item={
                 "job_id": job_id,
-                "status": "processing",
+                "status": "upload_pending",
                 "s3_key": s3_key,
                 "s3_bucket": RESUME_BUCKET,
-                "job_description": job_description,
                 "filename": filename,
-                "created_at": datetime.now().isoformat(),
-                "ttl": int(datetime.now().timestamp()) + 86400,
+                "job_description": job_description,
+                "created_at": now.isoformat() + "Z",
+                "ttl": int(now.timestamp()) + 86400,
             }
         )
 
-        logger.info("Created job %s, saved to %s", job_id, s3_key)
-
-        return {
-            "statusCode": 202,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-            "body": json.dumps(
-                {
-                    "job_id": job_id,
-                    "status": "processing",
-                    "message": "Resume uploaded successfully. Analysis in progress.",
-                    "poll_url": f"/status/{job_id}",
-                }
-            ),
-        }
-
-    except json.JSONDecodeError as e:
-        logger.exception("JSON decode error")
-        return {
-            "statusCode": 400,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-            "body": json.dumps({"error": f"Invalid JSON: {e!s}"}),
-        }
-
-    except Exception as e:
-        logger.exception("ERROR")
-        return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-            "body": json.dumps({"error": str(e), "type": type(e).__name__}),
-        }
+        return _response(
+            200,
+            {
+                "job_id": job_id,
+                "status": "upload_pending",
+                "s3_key": s3_key,
+                "s3_url": f"s3://{RESUME_BUCKET}/{s3_key}",
+                "expires_in": UPLOAD_EXPIRES_SECONDS,
+                "upload": {
+                    "url": presigned_post["url"],
+                    "fields": presigned_post["fields"],
+                },
+            },
+        )
+    except json.JSONDecodeError:
+        return _response(400, {"error": "Invalid JSON format"})
+    except Exception as exc:
+        logger.exception("Upload handler failed")
+        return _response(500, {"error": str(exc), "type": type(exc).__name__})

@@ -7,39 +7,41 @@ import boto3
 
 dynamodb = boto3.resource("dynamodb")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
 results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
 logger = logging.getLogger(__name__)
 
 
+def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+        },
+        "body": json.dumps(payload),
+    }
+
+
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Status handler that returns the analysis result for a given job ID."""
-    logger.info("Status handler invoked: %s", json.dumps(event, default=str)[:500])
+    logger.info("Status handler invoked")
 
     try:
         job_id = event.get("pathParameters", {}).get("job_id")
 
         if not job_id:
-            return {
-                "statusCode": 400,
-                "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-                "body": json.dumps({"error": "Missing job_id in path"}),
-            }
+            return _response(400, {"error": "Missing job_id in path"})
 
         if not results_table:
             raise RuntimeError("RESULTS_TABLE environment variable not configured")
 
         response = results_table.get_item(Key={"job_id": job_id})
-
         if "Item" not in response:
-            return {
-                "statusCode": 404,
-                "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-                "body": json.dumps({"error": "Job not found"}),
-            }
+            return _response(404, {"error": "Job not found"})
 
         item = response["Item"]
-
         result = {
             "job_id": job_id,
             "status": item.get("status", "unknown"),
@@ -52,16 +54,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         elif item.get("status") == "failed":
             result["error"] = item.get("error")
 
-        return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-            "body": json.dumps(result),
-        }
-
-    except Exception as e:
-        logger.exception("ERROR")
-        return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
-            "body": json.dumps({"error": str(e), "type": type(e).__name__}),
-        }
+        return _response(200, result)
+    except Exception as exc:
+        logger.exception("Status handler failed")
+        return _response(500, {"error": str(exc), "type": type(exc).__name__})

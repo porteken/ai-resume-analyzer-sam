@@ -1,22 +1,19 @@
 """Shared test utilities and common assertion helpers."""
 
 import json
+import os
 from typing import Any
 from unittest.mock import MagicMock
 
 
 def assert_cors_headers(response: dict[str, Any]) -> None:
-    """Assert that a response contains proper CORS headers.
-
-    Args:
-        response: The API Gateway response dictionary
-
-    """
+    """Assert that a response contains proper CORS headers."""
     assert "headers" in response, "Response must contain headers"
     headers = response["headers"]
 
     assert "Access-Control-Allow-Origin" in headers, "Missing CORS origin header"
-    assert headers["Access-Control-Allow-Origin"] == "*", "CORS origin should be *"
+    expected_origin = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
+    assert headers["Access-Control-Allow-Origin"] == expected_origin
 
 
 def assert_response_structure(
@@ -24,19 +21,10 @@ def assert_response_structure(
     expected_status: int,
     should_have_body: bool = True,
 ) -> None:
-    """Assert that a response has the correct API Gateway structure.
-
-    Args:
-        response: The API Gateway response dictionary
-        expected_status: Expected HTTP status code
-        should_have_body: Whether the response should have a body
-        should_have_headers: Whether the response should have headers
-
-    """
+    """Assert that a response has the correct API Gateway structure."""
     assert "statusCode" in response, "Response must contain statusCode"
     assert response["statusCode"] == expected_status, \
         f"Expected status {expected_status}, got {response['statusCode']}"
-
 
     if should_have_body:
         assert "body" in response, "Response must contain body"
@@ -51,17 +39,7 @@ def assert_error_response(
     expected_status: int,
     expected_error_message: str | None = None
 ) -> dict[str, Any]:
-    """Assert that a response is a properly formatted error response.
-
-    Args:
-        response: The API Gateway response dictionary
-        expected_status: Expected HTTP status code (should be 4xx or 5xx)
-        expected_error_message: Optional expected error message substring
-
-    Returns:
-        The parsed response body as a dictionary
-
-    """
+    """Assert that a response is a properly formatted error response."""
     assert_response_structure(response, expected_status)
 
     if "headers" in response:
@@ -82,17 +60,7 @@ def assert_success_response(
     expected_status: int = 200,
     required_fields: list | None = None
 ) -> dict[str, Any]:
-    """Assert that a response is a successful response with required fields.
-
-    Args:
-        response: The API Gateway response dictionary
-        expected_status: Expected HTTP status code (default: 200)
-        required_fields: Optional list of required fields in response body
-
-    Returns:
-        The parsed response body as a dictionary
-
-    """
+    """Assert that a response is a successful response with required fields."""
     assert_response_structure(response, expected_status)
     assert_cors_headers(response)
 
@@ -112,19 +80,7 @@ def create_mock_event(
     query_params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None
 ) -> dict[str, Any]:
-    """Create a mock API Gateway event for testing.
-
-    Args:
-        body: Request body as dictionary (will be JSON serialized)
-        http_method: HTTP method (default: POST)
-        path: Request path (default: /)
-        query_params: Query string parameters
-        headers: Request headers
-
-    Returns:
-        A mock API Gateway event dictionary
-
-    """
+    """Create a mock API Gateway event for testing."""
     return {
         "httpMethod": http_method,
         "path": path,
@@ -145,17 +101,7 @@ def create_mock_context(
     request_id: str = "test-request-id",
     memory_limit: int = 128
 ) -> MagicMock:
-    """Create a mock Lambda context object for testing.
-
-    Args:
-        function_name: Lambda function name
-        request_id: Request ID
-        memory_limit: Memory limit in MB
-
-    Returns:
-        A mock Lambda context object
-
-    """
+    """Create a mock Lambda context object."""
     context = MagicMock()
     context.function_name = function_name
     context.aws_request_id = request_id

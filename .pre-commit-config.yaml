@@ -1,0 +1,9 @@
+repos:
+-   repo: local
+    hooks:
+    - id: pytest
+      name: Run Pytest
+      entry: pytest --no-cov
+      language: system
+      pass_filenames: false
+      always_run: true

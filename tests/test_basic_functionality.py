@@ -1,6 +1,5 @@
 """Basic functionality tests that don't require complex AWS mocking."""
 
-import base64
 import json
 import os
 import uuid
@@ -10,15 +9,12 @@ import pytest
 
 
 @pytest.mark.unit
-class TestPDFBase64Encoding:
-    """Test PDF base64 encoding/decoding."""
+class TestUploadRequestShape:
+    """Test presigned-upload request shape."""
 
-    def test_valid_base64_decode(self, sample_pdf_base64) -> None:
-        """Test that sample PDF can be base64 decoded."""
-        pdf_bytes = base64.b64decode(sample_pdf_base64)
-        assert isinstance(pdf_bytes, bytes)
-        assert pdf_bytes.startswith(b"%PDF")
-        assert pdf_bytes.endswith(b"%%EOF")
+    def test_upload_request_contains_filename(self, sample_upload_event) -> None:
+        body = json.loads(sample_upload_event["body"])
+        assert "filename" in body
 
 
 @pytest.mark.unit
@@ -29,7 +25,7 @@ class TestEventStructure:
         """Test that upload event contains required fields."""
         assert "body" in sample_upload_event
         body = json.loads(sample_upload_event["body"])
-        assert "pdf_base64" in body
+        assert "filename" in body
 
     def test_status_event_has_required_fields(self, sample_status_event) -> None:
         """Test that status event contains required fields."""
@@ -54,7 +50,7 @@ class TestJSONSerialization:
         body = json.loads(sample_upload_event["body"])
 
         assert isinstance(body, dict)
-        assert "pdf_base64" in body
+        assert "filename" in body
 
     def test_json_dumps_response(self) -> None:
         """Test creating JSON response."""
@@ -81,20 +77,26 @@ class TestResponseStructure:
         """Test that success response has correct structure."""
         response = {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "https://app.example.com",
+            },
             "body": json.dumps({"message": "Success"}),
         }
 
         assert response["statusCode"] == 200
         assert "headers" in response
         assert "body" in response
-        assert response["headers"]["Access-Control-Allow-Origin"] == "*"
+        assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
 
     def test_error_response_structure(self) -> None:
         """Test that error response has correct structure."""
         response = {
             "statusCode": 400,
-            "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "https://app.example.com",
+            },
             "body": json.dumps({"error": "Bad request"}),
         }
 
@@ -103,10 +105,13 @@ class TestResponseStructure:
 
     def test_cors_headers_present(self) -> None:
         """Test that CORS headers are included."""
-        headers = {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
+        headers = {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "https://app.example.com",
+        }
 
         assert "Access-Control-Allow-Origin" in headers
-        assert headers["Access-Control-Allow-Origin"] == "*"
+        assert headers["Access-Control-Allow-Origin"] == "https://app.example.com"
 
 
 class TestStatusCodes:
