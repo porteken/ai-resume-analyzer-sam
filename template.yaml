@@ -277,16 +277,15 @@ Resources:
 
   ResumeAnalyzerApiKey:
     Type: AWS::ApiGateway::ApiKey
+    DependsOn: ResumeAnalyzerApiStage
     Properties:
       Name: !Sub '${AWS::StackName}-ApiKey'
       Description: API Key for Resume Analyzer
       Enabled: true
-      StageKeys:
-        - RestApiId: !Ref ResumeAnalyzerApi
-          StageName: !Ref ApiStageName
 
   ResumeAnalyzerUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ResumeAnalyzerApiStage
     Properties:
       UsagePlanName: !Sub '${AWS::StackName}-UsagePlan'
       Description: Usage plan for Resume Analyzer API
