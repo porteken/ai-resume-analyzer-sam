@@ -120,7 +120,16 @@ jobs:
           esac
 
           delete_and_wait() {
-            aws cloudformation delete-stack --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+            local retain_resources=("$@")
+            if [[ ${#retain_resources[@]} -gt 0 ]]; then
+              echo "Deleting stack while retaining resources: ${retain_resources[*]}"
+              aws cloudformation delete-stack \
+                --stack-name "$SAM_STACK_NAME" \
+                --region "$AWS_REGION" \
+                --retain-resources "${retain_resources[@]}"
+            else
+              aws cloudformation delete-stack --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+            fi
             set +e
             aws cloudformation wait stack-delete-complete --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
             WAIT_RC=$?
@@ -150,6 +159,23 @@ jobs:
           if delete_and_wait; then
             echo "Deleted broken stack after S3 cleanup. Deploy step will recreate it."
             exit 0
+          fi
+
+          echo "Delete still failed. Checking for failed S3 bucket resources to retain..."
+          FAILED_S3_LOGICAL_IDS=$(aws cloudformation describe-stack-resources \
+            --stack-name "$SAM_STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query "StackResources[?ResourceType=='AWS::S3::Bucket' && ResourceStatus=='DELETE_FAILED'].LogicalResourceId" \
+            --output text || true)
+
+          if [[ -n "$FAILED_S3_LOGICAL_IDS" && "$FAILED_S3_LOGICAL_IDS" != "None" ]]; then
+            echo "Retrying delete with S3 bucket resources retained: $FAILED_S3_LOGICAL_IDS"
+            # shellcheck disable=SC2206
+            RETAIN_IDS=( $FAILED_S3_LOGICAL_IDS )
+            if delete_and_wait "${RETAIN_IDS[@]}"; then
+              echo "Deleted broken stack by retaining failed S3 resources. Deploy step will recreate stack resources."
+              exit 0
+            fi
           fi
 
           echo "Stack cleanup failed after retry. Recent stack events:"
