@@ -85,6 +85,9 @@ jobs:
           use-installer: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build SAM application for deploy
+        run: sam build --use-container --template template.yaml
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -160,6 +163,7 @@ jobs:
           fi
 
           sam deploy \
+            --template-file .aws-sam/build/template.yaml \
             --stack-name "$SAM_STACK_NAME" \
             --region "$AWS_REGION" \
             --capabilities CAPABILITY_IAM \

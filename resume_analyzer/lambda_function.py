@@ -199,7 +199,8 @@ def _update_job_status(
         values[":completed"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     if error:
-        expression += ", error = :error"
+        expression += ", #error = :error"
+        names["#error"] = "error"
         values[":error"] = error
 
     try:
