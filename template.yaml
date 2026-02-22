@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
-Description: AI Resume Analyzer using S3 presigned uploads and Gemini 3 Flash multimodal PDF analysis.
+Description: AI Resume Analyzer using S3 presigned uploads and Gemini 2.5 Flash multimodal PDF analysis.
 
 Parameters:
   GoogleApiKey:
@@ -126,7 +126,7 @@ Resources:
       Environment:
         Variables:
           GOOGLE_API_KEY: !Ref GoogleApiKey
-          GEMINI_MODEL_ID: gemini-3-flash-preview
+          GEMINI_MODEL_ID: gemini-2.5-flash
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId

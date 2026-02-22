@@ -90,7 +90,7 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
 
 @pytest.mark.unit
 class TestGeminiAnalysis:
-    """Tests for Gemini 3 Flash PDF analysis path."""
+    """Tests for Gemini 2.5 Flash PDF analysis path."""
 
     def test_analyze_pdf_returns_structured_json(
         self,
@@ -108,7 +108,7 @@ class TestGeminiAnalysis:
         assert "experience" in analysis
 
         call_args = lambda_function_module._get_genai_client().models.generate_content.call_args[1]
-        assert call_args["model"] == "gemini-3-flash-preview"
+        assert call_args["model"] == "gemini-2.5-flash"
 
         config = call_args["config"]
         assert config.response_mime_type == "application/json"
