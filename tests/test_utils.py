@@ -12,7 +12,7 @@ def assert_cors_headers(response: dict[str, Any]) -> None:
     headers = response["headers"]
 
     assert "Access-Control-Allow-Origin" in headers, "Missing CORS origin header"
-    expected_origin = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
+    expected_origin = os.environ.get("CORS_ALLOW_ORIGIN", "*")
     assert headers["Access-Control-Allow-Origin"] == expected_origin
 
 

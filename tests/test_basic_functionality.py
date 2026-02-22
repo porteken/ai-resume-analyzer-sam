@@ -79,7 +79,7 @@ class TestResponseStructure:
             "statusCode": 200,
             "headers": {
                 "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "https://app.example.com",
+                "Access-Control-Allow-Origin": "*",
             },
             "body": json.dumps({"message": "Success"}),
         }
@@ -87,7 +87,7 @@ class TestResponseStructure:
         assert response["statusCode"] == 200
         assert "headers" in response
         assert "body" in response
-        assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
+        assert response["headers"]["Access-Control-Allow-Origin"] == "*"
 
     def test_error_response_structure(self) -> None:
         """Test that error response has correct structure."""
@@ -95,7 +95,7 @@ class TestResponseStructure:
             "statusCode": 400,
             "headers": {
                 "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "https://app.example.com",
+                "Access-Control-Allow-Origin": "*",
             },
             "body": json.dumps({"error": "Bad request"}),
         }
@@ -107,11 +107,11 @@ class TestResponseStructure:
         """Test that CORS headers are included."""
         headers = {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "https://app.example.com",
+            "Access-Control-Allow-Origin": "*",
         }
 
         assert "Access-Control-Allow-Origin" in headers
-        assert headers["Access-Control-Allow-Origin"] == "https://app.example.com"
+        assert headers["Access-Control-Allow-Origin"] == "*"
 
 
 class TestStatusCodes:

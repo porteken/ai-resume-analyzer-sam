@@ -17,7 +17,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
 
 results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
