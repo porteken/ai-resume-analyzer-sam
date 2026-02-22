@@ -137,6 +137,9 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-StatusFunction'
       CodeUri: resume_analyzer/
       Handler: status_handler.lambda_handler
+      Environment:
+        Variables:
+          RESULTS_TABLE: !Ref ResultsTable
 
       Policies:
         - Statement:
