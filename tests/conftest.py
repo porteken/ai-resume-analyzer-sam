@@ -71,6 +71,7 @@ def mock_boto3_clients() -> dict[str, Any]:
                         "highlights": ["Built APIs"],
                     }
                 ],
+                "strengths": ["Strong Python and AWS delivery experience"],
                 "gaps": ["No direct ML production ownership"],
                 "recommendations": ["Add ML deployment examples"],
             },

@@ -30,6 +30,30 @@ def _validate_results_table() -> None:
         raise RuntimeError("RESULTS_TABLE environment variable not configured")
 
 
+def _coerce_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                result.append(text)
+    return result
+
+
+def _normalize_analysis_result(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    normalized = dict(value)
+    for field in ("strengths", "gaps", "recommendations"):
+        normalized[field] = _coerce_string_list(normalized.get(field))
+
+    return normalized
+
+
 def _get_job_item(job_id: str) -> dict[str, Any] | None:
     """Get job item from DynamoDB."""
     if not results_table:
@@ -62,7 +86,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
         if item.get("status") == "completed":
-            result["analysis_result"] = item.get("analysis_result")
+            result["analysis_result"] = _normalize_analysis_result(item.get("analysis_result"))
         elif item.get("status") == "failed":
             result["error"] = item.get("error")
 

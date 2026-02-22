@@ -68,6 +68,7 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
                     "highlights": ["Built APIs"],
                 }
             ],
+            "strengths": ["Strong Python backend development"],
             "gaps": ["No direct ML production ownership"],
             "recommendations": ["Add ML deployment examples"],
         }
@@ -106,6 +107,9 @@ class TestGeminiAnalysis:
         assert analysis["name"] == "Jane Doe"
         assert "skills" in analysis
         assert "experience" in analysis
+        assert "strengths" in analysis
+        assert "gaps" in analysis
+        assert "recommendations" in analysis
 
         call_args = lambda_function_module._get_genai_client().models.generate_content.call_args[1]
         assert call_args["model"] == "gemini-2.5-flash"
@@ -113,7 +117,39 @@ class TestGeminiAnalysis:
         config = call_args["config"]
         assert config.response_mime_type == "application/json"
         assert config.response_json_schema["type"] == "object"
+        assert "strengths" in config.response_json_schema["properties"]
         assert "recommendations" in config.response_json_schema["properties"]
+
+    def test_analyze_backfills_missing_strengths_gaps_and_recommendations(
+        self,
+        lambda_function_module: Any,
+        sample_analyze_event: dict[str, Any],
+        mock_lambda_context: Any,
+    ) -> None:
+        lambda_function_module._get_genai_client().models.generate_content.return_value.text = (
+            json.dumps(
+                {
+                    "name": "Jane Doe",
+                    "contact_info": {
+                        "email": "",
+                        "phone": "",
+                        "location": "",
+                        "linkedin": "",
+                    },
+                    "summary": "",
+                    "skills": [],
+                    "experience": [],
+                }
+            )
+        )
+
+        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        body = assert_success_response(response, 200, required_fields=["analysis_result"])
+        analysis = body["analysis_result"]
+
+        assert analysis["strengths"] == []
+        assert analysis["gaps"] == []
+        assert analysis["recommendations"] == []
 
     def test_analyze_requires_s3_location(
         self, lambda_function_module: Any, mock_lambda_context: Any
