@@ -1,15 +1,19 @@
 name: SAM Build and Deploy
 
 on:
-  pull_request:
-  push:
+  pull_request:            # build validation on PRs
     branches:
-      - '**'
-  workflow_dispatch:
+      - 'dev'
+      - 'prd'
+  push:                    # full workflow on push only for dev/prd
+    branches:
+      - 'dev'
+      - 'prd'
+  workflow_dispatch:       # manual trigger
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write          # for OIDC
 
 concurrency:
   group: sam-deploy-${{ github.ref }}
@@ -26,14 +30,24 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Cache Python deps + build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            .aws-sam/build
+          key: ${{ runner.os }}-sam-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-sam-
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
@@ -52,12 +66,12 @@ jobs:
 
   deploy:
     name: Deploy
-    runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'   # deploy only on push, not on PR
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -77,12 +91,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: github-actions-sam-deploy
 
-      - name: Build Lambda layer dependencies
-        run: bash build_layer.sh
-
-      - name: Resolve deployment target from branch
+      - name: Resolve deployment target
         run: |
-          if [[ "${GITHUB_REF}" == "refs/heads/prd" ]]; then
+          if [[ "${GITHUB_REF##*/}" == "prd" ]]; then
             echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_PROD || 'ai-resume-analyzer-prod' }}" >> "$GITHUB_ENV"
             echo "API_STAGE_NAME=prod" >> "$GITHUB_ENV"
           else
@@ -92,30 +103,17 @@ jobs:
 
       - name: Recover broken stack state
         run: |
-          set +e
+          set -euo pipefail
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "$SAM_STACK_NAME" \
             --region "$AWS_REGION" \
             --query 'Stacks[0].StackStatus' \
-            --output text 2>&1)
-          DESCRIBE_RC=$?
-          set -e
-
-          if [[ $DESCRIBE_RC -ne 0 ]]; then
-            if [[ "$STACK_STATUS" == *"does not exist"* ]]; then
-              echo "Stack $SAM_STACK_NAME does not exist yet. Proceeding with create."
-              exit 0
-            fi
-            echo "Could not read stack status:"
-            echo "$STACK_STATUS"
-            exit 1
-          fi
-
+            --output text 2>&1) || STACK_STATUS=""
           echo "Current stack status: $STACK_STATUS"
 
           case "$STACK_STATUS" in
             ROLLBACK_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_FAILED)
-              echo "Stack is in a broken state ($STACK_STATUS). Attempting cleanup before deploy."
+              echo "Detected broken CF stack ($STACK_STATUS). Cleaning up..."
               ;;
             *)
               echo "No stack recovery needed."
@@ -124,78 +122,20 @@ jobs:
           esac
 
           delete_and_wait() {
-            local retain_resources=("$@")
-            if [[ ${#retain_resources[@]} -gt 0 ]]; then
-              echo "Deleting stack while retaining resources: ${retain_resources[*]}"
-              aws cloudformation delete-stack \
-                --stack-name "$SAM_STACK_NAME" \
-                --region "$AWS_REGION" \
-                --retain-resources "${retain_resources[@]}"
-            else
-              aws cloudformation delete-stack --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
-            fi
-            set +e
-            aws cloudformation wait stack-delete-complete --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
-            WAIT_RC=$?
-            set -e
-            return "$WAIT_RC"
+            aws cloudformation delete-stack \
+              --stack-name "$SAM_STACK_NAME" \
+              --region "$AWS_REGION"
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "$SAM_STACK_NAME" \
+              --region "$AWS_REGION"
           }
 
-          if delete_and_wait; then
-            echo "Deleted broken stack. Deploy step will recreate it."
-            exit 0
-          fi
+          delete_and_wait || true
 
-          echo "Initial stack delete failed. Attempting S3 bucket cleanup before retry..."
-          S3_BUCKETS=$(aws cloudformation describe-stack-resources \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
-            --output text || true)
-
-          if [[ -n "$S3_BUCKETS" && "$S3_BUCKETS" != "None" ]]; then
-            for BUCKET in $S3_BUCKETS; do
-              echo "Emptying bucket $BUCKET..."
-              aws s3 rm "s3://$BUCKET" --recursive || true
-            done
-          fi
-
-          if delete_and_wait; then
-            echo "Deleted broken stack after S3 cleanup. Deploy step will recreate it."
-            exit 0
-          fi
-
-          echo "Delete still failed. Checking for failed S3 bucket resources to retain..."
-          FAILED_S3_LOGICAL_IDS=$(aws cloudformation describe-stack-resources \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query "StackResources[?ResourceType=='AWS::S3::Bucket' && ResourceStatus=='DELETE_FAILED'].LogicalResourceId" \
-            --output text || true)
-
-          if [[ -n "$FAILED_S3_LOGICAL_IDS" && "$FAILED_S3_LOGICAL_IDS" != "None" ]]; then
-            echo "Retrying delete with S3 bucket resources retained: $FAILED_S3_LOGICAL_IDS"
-            # shellcheck disable=SC2206
-            RETAIN_IDS=( $FAILED_S3_LOGICAL_IDS )
-            if delete_and_wait "${RETAIN_IDS[@]}"; then
-              echo "Deleted broken stack by retaining failed S3 resources. Deploy step will recreate stack resources."
-              exit 0
-            fi
-          fi
-
-          echo "Stack cleanup failed after retry. Recent stack events:"
-          aws cloudformation describe-stack-events \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 20 \
-            --query "StackEvents[].{Time:Timestamp,Status:ResourceStatus,Type:ResourceType,LogicalId:LogicalResourceId,Reason:ResourceStatusReason}" \
-            --output table || true
-          exit 1
-
-      - name: Build and deploy
+      - name: Build and Deploy
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          sam build --use-container --template template.yaml
           PARAM_OVERRIDES=(
             "ApiStageName=$API_STAGE_NAME"
             "EnableBucketLifecycle=$ENABLE_BUCKET_LIFECYCLE"
@@ -206,6 +146,7 @@ jobs:
           if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
           fi
+
           sam deploy \
             --stack-name "$SAM_STACK_NAME" \
             --region "$AWS_REGION" \
