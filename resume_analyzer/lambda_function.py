@@ -61,6 +61,10 @@ RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        "strengths": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
         "gaps": {
             "type": "array",
             "items": {"type": "string"},
@@ -76,11 +80,36 @@ RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
         "summary",
         "skills",
         "experience",
+        "strengths",
         "gaps",
         "recommendations",
     ],
     "additionalProperties": False,
 }
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                result.append(text)
+    return result
+
+
+def _normalize_analysis_result(analysis: Any) -> dict[str, Any]:
+    if not isinstance(analysis, dict):
+        raise RuntimeError("Gemini returned invalid JSON object")
+
+    normalized = dict(analysis)
+    for field in ("strengths", "gaps", "recommendations"):
+        normalized[field] = _coerce_string_list(normalized.get(field))
+
+    return normalized
 
 
 def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -152,7 +181,8 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
     response_schema = RESUME_ANALYSIS_RESPONSE_SCHEMA
     prompt = (
         "Analyze this resume PDF against the provided job description and return JSON only. "
-        "If a field is unknown, return an empty string or empty list.\n\n"
+        "If a field is unknown, return an empty string or empty list. "
+        "Provide concise, job-targeted strengths, gaps, and recommendations as string arrays.\n\n"
         f"Job Description:\n{job_description}"
     )
 
@@ -175,7 +205,7 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
         raise RuntimeError("Gemini returned an empty response")
 
     try:
-        return json.loads(text)
+        return _normalize_analysis_result(json.loads(text))
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Gemini returned non-JSON output: {text[:200]}") from exc
 

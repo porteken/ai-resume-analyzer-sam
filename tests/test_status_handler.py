@@ -50,6 +50,7 @@ class TestStatusHandler:
                     "summary": "Strong profile",
                     "skills": ["Python"],
                     "experience": [],
+                    "strengths": ["Python backend expertise"],
                     "gaps": [],
                     "recommendations": [],
                 },
@@ -66,6 +67,28 @@ class TestStatusHandler:
         assert body["status"] == "completed"
         assert body["filename"] == "test-resume.pdf"
         assert body["analysis_result"]["name"] == "Jane Doe"
+        assert body["analysis_result"]["strengths"] == ["Python backend expertise"]
+
+    def test_get_completed_job_backfills_missing_analysis_lists(
+        self, status_handler_module, sample_status_event, mock_lambda_context, mock_boto3_clients
+    ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "completed",
+                "analysis_result": {
+                    "name": "Jane Doe",
+                    "summary": "Strong profile",
+                },
+            }
+        }
+
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
+        body = assert_success_response(response, 200, required_fields=["analysis_result"])
+
+        assert body["analysis_result"]["strengths"] == []
+        assert body["analysis_result"]["gaps"] == []
+        assert body["analysis_result"]["recommendations"] == []
 
     def test_get_processing_job(
         self, status_handler_module, sample_status_event, mock_lambda_context, mock_boto3_clients
