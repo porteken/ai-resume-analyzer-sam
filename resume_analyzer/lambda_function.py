@@ -264,6 +264,29 @@ def _get_s3_location(
     return bucket, key
 
 
+def _is_upstream_unavailable_error(exc: Exception) -> bool:
+    """Detect transient upstream 503 errors (e.g., Gemini high demand)."""
+    message = str(exc)
+    type_name = type(exc).__name__
+
+    status_code = getattr(exc, "status_code", None)
+    code = getattr(exc, "code", None)
+    if status_code == 503 or code == 503:
+        return True
+
+    if "503" not in message:
+        return False
+
+    unavailable_markers = (
+        "UNAVAILABLE",
+        "high demand",
+        "ServerError",
+        "'code': 503",
+        '"code": 503',
+    )
+    return type_name == "ServerError" or any(marker in message for marker in unavailable_markers)
+
+
 def _handle_analysis_error(job_id: str | None, exc: Exception) -> dict[str, Any]:
     """Handle analysis errors and return appropriate response."""
     if isinstance(exc, ClientError):
@@ -271,6 +294,15 @@ def _handle_analysis_error(job_id: str | None, exc: Exception) -> dict[str, Any]
         if job_id:
             _update_job_status(job_id, "failed", error=message)
         return _response(500, {"error": message})
+
+    if _is_upstream_unavailable_error(exc):
+        message = (
+            "Analysis service is temporarily unavailable due to high demand. "
+            "Please try again in a few minutes."
+        )
+        if job_id:
+            _update_job_status(job_id, "failed", error=message)
+        return _response(503, {"error": message, "type": "ServiceUnavailable"})
 
     logger.exception("Analysis handler failed")
     if job_id:
