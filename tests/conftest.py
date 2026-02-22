@@ -6,6 +6,9 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+# Constant to avoid duplicate string literals
+CONTENT_TYPE_JSON = "application/json"
+
 
 @pytest.fixture(autouse=True)
 def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,7 +96,7 @@ def sample_upload_event() -> dict[str, Any]:
     return {
         "httpMethod": "POST",
         "path": "/upload",
-        "headers": {"Content-Type": "application/json"},
+        "headers": {"Content-Type": CONTENT_TYPE_JSON},
         "body": json.dumps(body_dict),
         "isBase64Encoded": False,
     }
@@ -110,7 +113,7 @@ def sample_analyze_event() -> dict[str, Any]:
     return {
         "httpMethod": "POST",
         "path": "/analyze",
-        "headers": {"Content-Type": "application/json"},
+        "headers": {"Content-Type": CONTENT_TYPE_JSON},
         "body": json.dumps(body_dict),
         "isBase64Encoded": False,
     }
@@ -123,7 +126,7 @@ def sample_status_event() -> dict[str, Any]:
         "httpMethod": "GET",
         "path": "/status/test-job-123",
         "pathParameters": {"job_id": "test-job-123"},
-        "headers": {"Content-Type": "application/json"},
+        "headers": {"Content-Type": CONTENT_TYPE_JSON},
     }
 
 
