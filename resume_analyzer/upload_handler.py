@@ -14,7 +14,6 @@ dynamodb: Any = boto3.resource("dynamodb")
 
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
-ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
@@ -86,17 +85,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             ["content-length-range", 1, MAX_UPLOAD_BYTES],
         ]
 
-        kwargs: dict[str, Any] = {
-            "Bucket": RESUME_BUCKET,
-            "Key": s3_key,
-            "Fields": fields,
-            "Conditions": conditions,
-            "ExpiresIn": UPLOAD_EXPIRES_SECONDS,
-        }
-        if ACCOUNT_ID:
-            kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
-
-        presigned_post = s3_client.generate_presigned_post(**kwargs)
+        presigned_post = s3_client.generate_presigned_post(
+            Bucket=RESUME_BUCKET,
+            Key=s3_key,
+            Fields=fields,
+            Conditions=conditions,
+            ExpiresIn=UPLOAD_EXPIRES_SECONDS,
+        )
 
         now = datetime.now(UTC)
         results_table.put_item(

@@ -16,6 +16,11 @@ Parameters:
       - dev
       - prod
 
+  ExistingApiId:
+    Type: String
+    Default: tbitqsc1li
+    Description: Existing shared API Gateway REST API ID (ai-resume-analyzer).
+
   AllowedOrigin:
     Type: String
     Default: "*"
@@ -29,12 +34,6 @@ Globals:
     Environment:
       Variables:
         CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
-
-  Api:
-    Cors:
-      AllowMethods: "'OPTIONS,GET,POST'"
-      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key'"
-      AllowOrigin: !Sub "'${AllowedOrigin}'"
 
 Resources:
   ResumeS3Bucket:
@@ -76,13 +75,6 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
-  ResumeAnalyzerApi:
-    Type: AWS::Serverless::Api
-    Properties:
-      StageName: !Ref ApiStageName
-      OpenApiVersion: '3.0.1'
-      # CORS is configured via Globals.Api.Cors
-
   PresignedUploadFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -107,16 +99,7 @@ Resources:
         Variables:
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
-          AWS_ACCOUNT_ID: !Ref AWS::AccountId
           UPLOAD_EXPIRES_SECONDS: '900'
-
-      Events:
-        UploadApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ResumeAnalyzerApi
-            Path: /upload
-            Method: POST
 
   AnalyzeFunction:
     Type: AWS::Serverless::Function
@@ -147,14 +130,6 @@ Resources:
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
 
-      Events:
-        AnalyzeApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ResumeAnalyzerApi
-            Path: /analyze
-            Method: POST
-
   StatusFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -169,13 +144,29 @@ Resources:
                 - dynamodb:GetItem
               Resource: !GetAtt ResultsTable.Arn
 
-      Events:
-        StatusApi:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ResumeAnalyzerApi
-            Path: /status/{job_id}
-            Method: GET
+  PresignedUploadInvokePermissionForApiGateway:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PresignedUploadFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/*/*/*
+
+  AnalyzeInvokePermissionForApiGateway:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AnalyzeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/*/*/*
+
+  StatusInvokePermissionForApiGateway:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref StatusFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/*/*/*
 
   PresignedUploadFunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -202,12 +193,12 @@ Outputs:
 
   UploadEndpoint:
     Description: Endpoint to request a presigned upload POST
-    Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
+    Value: !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
 
   AnalyzeEndpoint:
     Description: Endpoint to trigger analysis
-    Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
+    Value: !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
 
   StatusEndpoint:
     Description: Endpoint to fetch status
-    Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}
+    Value: !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}

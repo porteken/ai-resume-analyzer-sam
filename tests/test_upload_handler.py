@@ -16,12 +16,10 @@ def upload_handler_module(mock_boto3_clients) -> Any:
     original_s3 = upload_handler.s3_client
     original_dynamodb = upload_handler.dynamodb
     original_results_table = upload_handler.results_table
-    original_account_id = upload_handler.ACCOUNT_ID
 
     upload_handler.s3_client = mock_boto3_clients["s3"]
     upload_handler.dynamodb = mock_boto3_clients["dynamodb"]
     upload_handler.results_table = mock_boto3_clients["dynamodb_table"]
-    upload_handler.ACCOUNT_ID = "123456789012"
 
     try:
         yield upload_handler
@@ -29,7 +27,6 @@ def upload_handler_module(mock_boto3_clients) -> Any:
         upload_handler.s3_client = original_s3
         upload_handler.dynamodb = original_dynamodb
         upload_handler.results_table = original_results_table
-        upload_handler.ACCOUNT_ID = original_account_id
 
 
 @pytest.mark.integration
@@ -58,7 +55,6 @@ class TestUploadHandler:
         call_args = mock_boto3_clients["s3"].generate_presigned_post.call_args[1]
         assert call_args["Bucket"] == "test-resume-bucket"
         assert call_args["Key"].startswith("uploads/")
-        assert call_args["ExpectedBucketOwner"] == "123456789012"
 
         mock_boto3_clients["dynamodb_table"].put_item.assert_called_once()
         item = mock_boto3_clients["dynamodb_table"].put_item.call_args[1]["Item"]
@@ -141,12 +137,3 @@ class TestUploadHandler:
         event = {"body": "[]", "isBase64Encoded": False}
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
         assert_error_response(response, 400, "Invalid JSON body")
-
-    def test_presigned_without_account_id(
-        self, upload_handler_module, sample_upload_event, mock_lambda_context, mock_boto3_clients
-    ) -> None:
-        upload_handler_module.ACCOUNT_ID = ""
-        response = upload_handler_module.lambda_handler(sample_upload_event, mock_lambda_context)
-        assert_success_response(response, 200, required_fields=["job_id"])
-        call_args = mock_boto3_clients["s3"].generate_presigned_post.call_args[1]
-        assert "ExpectedBucketOwner" not in call_args
