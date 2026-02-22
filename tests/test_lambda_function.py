@@ -22,8 +22,12 @@ class _FakeGenerateContentConfig:
 
 
 class _FakeTypes:
-    Part = _FakePart
-    GenerateContentConfig = _FakeGenerateContentConfig
+    def __getattr__(self, name: str) -> Any:
+        if name == "Part":
+            return _FakePart
+        if name == "GenerateContentConfig":
+            return _FakeGenerateContentConfig
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
 
 @pytest.fixture
@@ -71,7 +75,7 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     mock_client.models.generate_content.return_value = mock_response
 
     lambda_function._get_genai_client = lambda: mock_client
-    lambda_function._get_genai_types = lambda: _FakeTypes
+    lambda_function._get_genai_types = lambda: _FakeTypes()
 
     try:
         yield lambda_function
