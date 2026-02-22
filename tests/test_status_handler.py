@@ -12,7 +12,6 @@ def status_handler_module(mock_boto3_clients) -> Any:
     """Import status_handler with mocked dependencies."""
     from resume_analyzer import status_handler
 
-
     original_dynamodb = status_handler.dynamodb
     original_results_table = status_handler.results_table
     status_handler.dynamodb = mock_boto3_clients["dynamodb"]
@@ -171,3 +170,15 @@ class TestStatusHandler:
 
         assert body["filename"] is None
         assert body["created_at"] is None
+
+    def test_results_table_not_configured(self, status_handler_module, mock_lambda_context) -> None:
+        """Test RuntimeError when RESULTS_TABLE is not set."""
+        original = status_handler_module.results_table
+        status_handler_module.results_table = None
+        try:
+            event = {"pathParameters": {"job_id": "test-job-123"}}
+            response = status_handler_module.lambda_handler(event, mock_lambda_context)
+            body = assert_error_response(response, 500)
+            assert "RESULTS_TABLE" in body["error"]
+        finally:
+            status_handler_module.results_table = original

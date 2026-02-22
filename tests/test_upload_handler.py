@@ -65,7 +65,9 @@ class TestUploadHandler:
         assert item["status"] == "upload_pending"
         assert item["filename"] == "test-resume.pdf"
 
-    def test_sanitizes_filename(self, upload_handler_module, mock_lambda_context, mock_boto3_clients) -> None:
+    def test_sanitizes_filename(
+        self, upload_handler_module, mock_lambda_context, mock_boto3_clients
+    ) -> None:
         event = {
             "body": json.dumps({"filename": "bad\nname?.pdf"}),
             "isBase64Encoded": False,
@@ -94,3 +96,57 @@ class TestUploadHandler:
 
         response = upload_handler_module.lambda_handler(sample_upload_event, mock_lambda_context)
         assert_error_response(response, 500, "S3 failure")
+
+    def test_sanitize_filename_adds_pdf_extension(self, upload_handler_module) -> None:
+        result = upload_handler_module._sanitize_filename("resume")
+        assert result.endswith(".pdf")
+
+    def test_sanitize_filename_empty_string(self, upload_handler_module) -> None:
+        result = upload_handler_module._sanitize_filename("")
+        assert result == "resume.pdf"
+
+    def test_resume_bucket_not_configured(self, upload_handler_module, mock_lambda_context) -> None:
+        original = upload_handler_module.RESUME_BUCKET
+        upload_handler_module.RESUME_BUCKET = None
+        try:
+            event = {"body": '{"filename": "test.pdf"}', "isBase64Encoded": False}
+            response = upload_handler_module.lambda_handler(event, mock_lambda_context)
+            assert_error_response(response, 500, "RESUME_BUCKET")
+        finally:
+            upload_handler_module.RESUME_BUCKET = original
+
+    def test_results_table_not_configured(self, upload_handler_module, mock_lambda_context) -> None:
+        original = upload_handler_module.results_table
+        upload_handler_module.results_table = None
+        try:
+            event = {"body": '{"filename": "test.pdf"}', "isBase64Encoded": False}
+            response = upload_handler_module.lambda_handler(event, mock_lambda_context)
+            assert_error_response(response, 500, "RESULTS_TABLE")
+        finally:
+            upload_handler_module.results_table = original
+
+    def test_base64_encoded_body(
+        self, upload_handler_module, mock_lambda_context, mock_boto3_clients
+    ) -> None:
+        import base64
+
+        payload = json.dumps({"filename": "test.pdf", "job_description": "test"})
+        encoded = base64.b64encode(payload.encode()).decode()
+        event = {"body": encoded, "isBase64Encoded": True}
+        response = upload_handler_module.lambda_handler(event, mock_lambda_context)
+        body = assert_success_response(response, 200, required_fields=["job_id", "s3_key"])
+        assert "test.pdf" in body["s3_key"]
+
+    def test_body_not_dict(self, upload_handler_module, mock_lambda_context) -> None:
+        event = {"body": "[]", "isBase64Encoded": False}
+        response = upload_handler_module.lambda_handler(event, mock_lambda_context)
+        assert_error_response(response, 400, "Invalid JSON body")
+
+    def test_presigned_without_account_id(
+        self, upload_handler_module, sample_upload_event, mock_lambda_context, mock_boto3_clients
+    ) -> None:
+        upload_handler_module.ACCOUNT_ID = ""
+        response = upload_handler_module.lambda_handler(sample_upload_event, mock_lambda_context)
+        assert_success_response(response, 200, required_fields=["job_id"])
+        call_args = mock_boto3_clients["s3"].generate_presigned_post.call_args[1]
+        assert "ExpectedBucketOwner" not in call_args
