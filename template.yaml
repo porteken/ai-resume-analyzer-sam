@@ -118,6 +118,7 @@ Resources:
               Resource: !Sub arn:aws:s3:::${ResumeS3Bucket}/*
             - Effect: Allow
               Action:
+                - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt ResultsTable.Arn
