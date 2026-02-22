@@ -5,6 +5,7 @@ ENV/
 *.pyc
 __pycache__/
 .pytest_cache/
+coverage.xml
 .coverage
 
 .aws-sam/
