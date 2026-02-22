@@ -14,7 +14,7 @@ Parameters:
       - prod
   AllowedOrigin:
     Type: String
-    Default: *
+    Default: "*"
     Description: Frontend origin allowed by API and S3 CORS.
 
 Resources:
