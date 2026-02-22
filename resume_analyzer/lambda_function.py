@@ -19,7 +19,7 @@ RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
-GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
+GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
 results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
@@ -142,7 +142,7 @@ def _get_genai_types() -> Any:
 
 
 def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]:
-    """Calls Gemini 3 Flash with native PDF input and strict JSON schema output."""
+    """Calls Gemini 2.5 Flash with native PDF input and strict JSON schema output."""
     if not GOOGLE_API_KEY:
         raise RuntimeError("GOOGLE_API_KEY environment variable not configured")
 
