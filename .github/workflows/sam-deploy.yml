@@ -21,10 +21,8 @@ concurrency:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-  ENABLE_BUCKET_LIFECYCLE: ${{ vars.ENABLE_BUCKET_LIFECYCLE || 'false' }}
-  ENABLE_BUCKET_PUBLIC_ACCESS_BLOCK: ${{ vars.ENABLE_BUCKET_PUBLIC_ACCESS_BLOCK || 'false' }}
-  ENABLE_BUCKET_ENCRYPTION: ${{ vars.ENABLE_BUCKET_ENCRYPTION || 'false' }}
-  ENABLE_BUCKET_CORS: ${{ vars.ENABLE_BUCKET_CORS || 'false' }}
+  SHARED_REST_API_ID: ${{ vars.SHARED_REST_API_ID || 'tbitqsc1li' }}
+  ALLOWED_ORIGIN: ${{ vars.ALLOWED_ORIGIN || '*' }}
 
 jobs:
   build:
@@ -69,6 +67,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'push'   # deploy only on push, not on PR
+    concurrency:
+      group: sam-deploy-shared-api
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -93,13 +94,26 @@ jobs:
 
       - name: Resolve deployment target
         run: |
-          if [[ "${GITHUB_REF##*/}" == "prd" ]]; then
-            echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_PROD || 'ai-resume-analyzer-prod' }}" >> "$GITHUB_ENV"
-            echo "API_STAGE_NAME=prod" >> "$GITHUB_ENV"
-          else
-            echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_DEV || 'ai-resume-analyzer-dev' }}" >> "$GITHUB_ENV"
-            echo "API_STAGE_NAME=dev" >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          BRANCH_NAME="${GITHUB_REF##*/}"
+
+          case "$BRANCH_NAME" in
+            prd)
+              echo "DEPLOY_BRANCH=prd" >> "$GITHUB_ENV"
+              echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_PROD || 'ai-resume-analyzer-prod' }}" >> "$GITHUB_ENV"
+              echo "API_STAGE_NAME=prod" >> "$GITHUB_ENV"
+              ;;
+            dev)
+              echo "DEPLOY_BRANCH=dev" >> "$GITHUB_ENV"
+              echo "SAM_STACK_NAME=${{ vars.SAM_STACK_NAME_DEV || 'ai-resume-analyzer-dev' }}" >> "$GITHUB_ENV"
+              echo "API_STAGE_NAME=dev" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Refusing deploy from unsupported branch: $BRANCH_NAME"
+              echo "Only pushes to dev or prd may deploy."
+              exit 1
+              ;;
+          esac
 
       - name: Recover broken stack state
         run: |
@@ -138,10 +152,8 @@ jobs:
         run: |
           PARAM_OVERRIDES=(
             "ApiStageName=$API_STAGE_NAME"
-            "EnableBucketLifecycle=$ENABLE_BUCKET_LIFECYCLE"
-            "EnableBucketPublicAccessBlock=$ENABLE_BUCKET_PUBLIC_ACCESS_BLOCK"
-            "EnableBucketEncryption=$ENABLE_BUCKET_ENCRYPTION"
-            "EnableBucketCors=$ENABLE_BUCKET_CORS"
+            "ExistingApiId=$SHARED_REST_API_ID"
+            "AllowedOrigin=$ALLOWED_ORIGIN"
           )
           if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
@@ -156,3 +168,162 @@ jobs:
             --parameter-overrides "${PARAM_OVERRIDES[@]}" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
+
+      - name: Sync shared API routes and deploy stage
+        run: |
+          set -euo pipefail
+
+          REST_API_ID="$SHARED_REST_API_ID"
+          REGION="$AWS_REGION"
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+
+          UPLOAD_FN="${SAM_STACK_NAME}-PresignedUploadFunction"
+          ANALYZE_FN="${SAM_STACK_NAME}-AnalyzeFunction"
+          STATUS_FN="${SAM_STACK_NAME}-StatusFunction"
+
+          aws lambda get-function --function-name "$UPLOAD_FN" >/dev/null
+          aws lambda get-function --function-name "$ANALYZE_FN" >/dev/null
+          aws lambda get-function --function-name "$STATUS_FN" >/dev/null
+
+          normalize_id() {
+            local value="${1:-}"
+            if [[ -z "$value" || "$value" == "None" || "$value" == "null" ]]; then
+              echo ""
+            else
+              echo "$value"
+            fi
+          }
+
+          get_root_resource_id() {
+            aws apigateway get-resources \
+              --rest-api-id "$REST_API_ID" \
+              --query "items[?path=='/'].id | [0]" \
+              --output text
+          }
+
+          get_child_resource_id() {
+            local parent_id="$1"
+            local path_part="$2"
+            aws apigateway get-resources \
+              --rest-api-id "$REST_API_ID" \
+              --query "items[?parentId=='${parent_id}' && pathPart=='${path_part}'].id | [0]" \
+              --output text
+          }
+
+          ensure_child_resource() {
+            local parent_id="$1"
+            local path_part="$2"
+            local resource_id
+            resource_id="$(normalize_id "$(get_child_resource_id "$parent_id" "$path_part")")"
+            if [[ -n "$resource_id" ]]; then
+              echo "$resource_id"
+              return 0
+            fi
+
+            aws apigateway create-resource \
+              --rest-api-id "$REST_API_ID" \
+              --parent-id "$parent_id" \
+              --path-part "$path_part" \
+              --query 'id' \
+              --output text
+          }
+
+          ensure_method_exists() {
+            local resource_id="$1"
+            local http_method="$2"
+            local request_parameters="${3:-}"
+
+            if aws apigateway get-method \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method "$http_method" >/dev/null 2>&1; then
+              return 0
+            fi
+
+            if [[ -n "$request_parameters" ]]; then
+              aws apigateway put-method \
+                --rest-api-id "$REST_API_ID" \
+                --resource-id "$resource_id" \
+                --http-method "$http_method" \
+                --authorization-type NONE \
+                --request-parameters "$request_parameters" >/dev/null
+            else
+              aws apigateway put-method \
+                --rest-api-id "$REST_API_ID" \
+                --resource-id "$resource_id" \
+                --http-method "$http_method" \
+                --authorization-type NONE >/dev/null
+            fi
+          }
+
+          upsert_lambda_proxy_integration() {
+            local resource_id="$1"
+            local http_method="$2"
+            local function_name="$3"
+            local lambda_arn="arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${function_name}"
+            local integration_uri="arn:aws:apigateway:${REGION}:lambda:path/2015-03-31/functions/${lambda_arn}/invocations"
+
+            ensure_method_exists "$resource_id" "$http_method"
+
+            aws apigateway put-integration \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method "$http_method" \
+              --type AWS_PROXY \
+              --integration-http-method POST \
+              --uri "$integration_uri" >/dev/null
+          }
+
+          ensure_cors_options() {
+            local resource_id="$1"
+
+            ensure_method_exists "$resource_id" OPTIONS
+
+            aws apigateway put-integration \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method OPTIONS \
+              --type MOCK \
+              --request-templates '{"application/json":"{\"statusCode\":200}"}' >/dev/null
+
+            aws apigateway put-method-response \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method OPTIONS \
+              --status-code 200 \
+              --response-parameters method.response.header.Access-Control-Allow-Headers=true,method.response.header.Access-Control-Allow-Methods=true,method.response.header.Access-Control-Allow-Origin=true >/dev/null || true
+
+            aws apigateway put-integration-response \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method OPTIONS \
+              --status-code 200 \
+              --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='${ALLOWED_ORIGIN}'" >/dev/null || true
+          }
+
+          ROOT_RESOURCE_ID="$(normalize_id "$(get_root_resource_id)")"
+          if [[ -z "$ROOT_RESOURCE_ID" ]]; then
+            echo "Unable to resolve root resource ID for shared API: $REST_API_ID"
+            exit 1
+          fi
+
+          UPLOAD_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" upload)"
+          ANALYZE_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" analyze)"
+          STATUS_PARENT_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" status)"
+          STATUS_RESOURCE_ID="$(ensure_child_resource "$STATUS_PARENT_RESOURCE_ID" '{job_id}')"
+
+          upsert_lambda_proxy_integration "$UPLOAD_RESOURCE_ID" POST "$UPLOAD_FN"
+          upsert_lambda_proxy_integration "$ANALYZE_RESOURCE_ID" POST "$ANALYZE_FN"
+          ensure_method_exists "$STATUS_RESOURCE_ID" GET "method.request.path.job_id=true"
+          upsert_lambda_proxy_integration "$STATUS_RESOURCE_ID" GET "$STATUS_FN"
+
+          ensure_cors_options "$UPLOAD_RESOURCE_ID"
+          ensure_cors_options "$ANALYZE_RESOURCE_ID"
+          ensure_cors_options "$STATUS_RESOURCE_ID"
+
+          aws apigateway create-deployment \
+            --rest-api-id "$REST_API_ID" \
+            --stage-name "$API_STAGE_NAME" \
+            --description "branch=${DEPLOY_BRANCH} sha=${GITHUB_SHA}" >/dev/null
+
+          echo "Deployed shared API ${REST_API_ID} stage ${API_STAGE_NAME} from stack ${SAM_STACK_NAME}"
