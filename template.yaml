@@ -1,21 +1,40 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
+
 Description: AI Resume Analyzer using S3 presigned uploads and Gemini 3 Flash multimodal PDF analysis.
+
 Parameters:
   GoogleApiKey:
     Type: String
     NoEcho: true
-    Description: Google Gemini API key.
+    Description: Google Gemini API key (kept secret).
+
   ApiStageName:
     Type: String
     Default: prod
     AllowedValues:
       - dev
       - prod
+
   AllowedOrigin:
     Type: String
     Default: "*"
     Description: Frontend origin allowed by API and S3 CORS.
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 10
+    MemorySize: 128
+    Environment:
+      Variables:
+        CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
+
+  Api:
+    Cors:
+      AllowMethods: "'OPTIONS,GET,POST'"
+      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key'"
+      AllowOrigin: !Sub "'${AllowedOrigin}'"
 
 Resources:
   ResumeS3Bucket:
@@ -62,23 +81,7 @@ Resources:
     Properties:
       StageName: !Ref ApiStageName
       OpenApiVersion: '3.0.1'
-      Cors:
-        AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
-        AllowOrigin: !Sub "'${AllowedOrigin}'"
-      GatewayResponses:
-        DEFAULT_4XX:
-          ResponseParameters:
-            Headers:
-              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
-              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
-              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
-        DEFAULT_5XX:
-          ResponseParameters:
-            Headers:
-              Access-Control-Allow-Origin: !Sub "'${AllowedOrigin}'"
-              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
-              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+      # CORS is configured via Globals.Api.Cors
 
   PresignedUploadFunction:
     Type: AWS::Serverless::Function
@@ -86,21 +89,27 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-PresignedUploadFunction'
       CodeUri: resume_analyzer/
       Handler: upload_handler.lambda_handler
-      Runtime: python3.11
-      Timeout: 10
-      MemorySize: 128
+
       Policies:
-        - S3WritePolicy:
-            BucketName: !Ref ResumeS3Bucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref ResultsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+              Resource: !Sub arn:aws:s3:::${ResumeS3Bucket}/*
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ResultsTable.Arn
+
       Environment:
         Variables:
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
-          CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
           UPLOAD_EXPIRES_SECONDS: '900'
+
       Events:
         UploadApi:
           Type: Api
@@ -115,14 +124,21 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-AnalyzeFunction'
       CodeUri: resume_analyzer/
       Handler: lambda_function.lambda_handler
-      Runtime: python3.11
       Timeout: 30
       MemorySize: 384
+
       Policies:
-        - S3ReadPolicy:
-            BucketName: !Ref ResumeS3Bucket
-        - DynamoDBCrudPolicy:
-            TableName: !Ref ResultsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub arn:aws:s3:::${ResumeS3Bucket}/*
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ResultsTable.Arn
+
       Environment:
         Variables:
           GOOGLE_API_KEY: !Ref GoogleApiKey
@@ -130,7 +146,7 @@ Resources:
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
-          CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
+
       Events:
         AnalyzeApi:
           Type: Api
@@ -145,16 +161,14 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-StatusFunction'
       CodeUri: resume_analyzer/
       Handler: status_handler.lambda_handler
-      Runtime: python3.11
-      Timeout: 5
-      MemorySize: 128
+
       Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref ResultsTable
-      Environment:
-        Variables:
-          RESULTS_TABLE: !Ref ResultsTable
-          CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt ResultsTable.Arn
+
       Events:
         StatusApi:
           Type: Api
@@ -163,16 +177,37 @@ Resources:
             Path: /status/{job_id}
             Method: GET
 
+  PresignedUploadFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${PresignedUploadFunction}
+      RetentionInDays: 5
+
+  AnalyzeFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AnalyzeFunction}
+      RetentionInDays: 5
+
+  StatusFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${StatusFunction}
+      RetentionInDays: 5
+
 Outputs:
   ResumeBucketName:
     Description: S3 bucket for uploaded resumes
     Value: !Ref ResumeS3Bucket
+
   UploadEndpoint:
-    Description: Endpoint to request a presigned S3 upload POST
+    Description: Endpoint to request a presigned upload POST
     Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
+
   AnalyzeEndpoint:
-    Description: Endpoint to trigger Gemini resume analysis
+    Description: Endpoint to trigger analysis
     Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
+
   StatusEndpoint:
-    Description: Endpoint to fetch analysis status by job ID
+    Description: Endpoint to fetch status
     Value: !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}
