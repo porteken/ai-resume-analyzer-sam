@@ -1,16 +1,16 @@
+import base64
 import json
 import logging
 import os
 import re
 import uuid
-import base64
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
 
 s3_client = boto3.client("s3")
-dynamodb = boto3.resource("dynamodb")
+dynamodb: Any = boto3.resource("dynamodb")
 
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
@@ -98,7 +98,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
         presigned_post = s3_client.generate_presigned_post(**kwargs)
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         results_table.put_item(
             Item={
                 "job_id": job_id,
@@ -107,7 +107,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "s3_bucket": RESUME_BUCKET,
                 "filename": filename,
                 "job_description": job_description,
-                "created_at": now.isoformat() + "Z",
+                "created_at": now.isoformat().replace("+00:00", "Z"),
                 "ttl": int(now.timestamp()) + 86400,
             }
         )
