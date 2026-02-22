@@ -7,7 +7,7 @@
     ".venv",
     "venv",
     ".aws-sam",
-    "layers"
+    "layers", "**/node_modules", "**/.*"
   ],
   "pythonVersion": "3.11",
   "pythonPlatform": "Linux",

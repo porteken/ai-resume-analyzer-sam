@@ -5,7 +5,7 @@ from typing import Any
 
 import boto3
 
-dynamodb = boto3.resource("dynamodb")
+dynamodb: Any = boto3.resource("dynamodb")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
@@ -24,6 +24,20 @@ def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_results_table() -> None:
+    """Validate that results_table is configured."""
+    if not results_table:
+        raise RuntimeError("RESULTS_TABLE environment variable not configured")
+
+
+def _get_job_item(job_id: str) -> dict[str, Any] | None:
+    """Get job item from DynamoDB."""
+    if not results_table:
+        return None
+    response = results_table.get_item(Key={"job_id": job_id})
+    return response.get("Item")
+
+
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Status handler that returns the analysis result for a given job ID."""
     logger.info("Status handler invoked")
@@ -34,14 +48,12 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if not job_id:
             return _response(400, {"error": "Missing job_id in path"})
 
-        if not results_table:
-            raise RuntimeError("RESULTS_TABLE environment variable not configured")
+        _validate_results_table()
 
-        response = results_table.get_item(Key={"job_id": job_id})
-        if "Item" not in response:
+        item = _get_job_item(job_id)
+        if not item:
             return _response(404, {"error": "Job not found"})
 
-        item = response["Item"]
         result = {
             "job_id": job_id,
             "status": item.get("status", "unknown"),

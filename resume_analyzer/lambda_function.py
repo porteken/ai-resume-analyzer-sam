@@ -1,7 +1,8 @@
+import base64
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -129,13 +130,13 @@ def _download_pdf_bytes(bucket: str, key: str) -> bytes:
 
 
 def _get_genai_client() -> Any:
-    from google import genai
+    from google import genai  # noqa: PLC0415  # type: ignore[import-not-found]
 
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
 def _get_genai_types() -> Any:
-    from google.genai import types
+    from google.genai import types  # noqa: PLC0415
 
     return types
 
@@ -195,7 +196,7 @@ def _update_job_status(
     if analysis_result is not None:
         expression += ", analysis_result = :result, completed_at = :completed"
         values[":result"] = analysis_result
-        values[":completed"] = datetime.utcnow().isoformat() + "Z"
+        values[":completed"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     if error:
         expression += ", error = :error"
@@ -230,8 +231,6 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
     try:
         body: Any = event.get("body", "")
         if event.get("isBase64Encoded", False):
-            import base64
-
             body = base64.b64decode(body).decode("utf-8")
 
         if isinstance(body, str):
@@ -245,7 +244,45 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
         return None, "Invalid JSON format"
 
 
+def _get_s3_location(
+    request: dict[str, Any], job_record: dict[str, Any]
+) -> tuple[str, str] | dict[str, Any]:
+    """Extract S3 bucket and key from request or job record.
+
+    Returns either (bucket, key) tuple or error response dict.
+    """
+    s3_url = request.get("s3_url")
+    if s3_url:
+        bucket, key = _parse_s3_url(str(s3_url))
+        return bucket, key
+
+    bucket = str(request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or "")
+    key = str(request.get("s3_key") or job_record.get("s3_key") or "")
+    if not bucket or not key:
+        return _response(400, {"error": "Provide 's3_url' or both 's3_bucket' and 's3_key'"})
+    return bucket, key
+
+
+def _handle_analysis_error(job_id: str | None, exc: Exception) -> dict[str, Any]:
+    """Handle analysis errors and return appropriate response."""
+    if isinstance(exc, ClientError):
+        message = f"S3 access error: {exc.response.get('Error', {}).get('Code', 'Unknown')}"
+        if job_id:
+            _update_job_status(job_id, "failed", error=message)
+        return _response(500, {"error": message})
+
+    logger.exception("Analysis handler failed")
+    if job_id:
+        _update_job_status(job_id, "failed", error=str(exc))
+    return _response(500, {"error": str(exc), "type": type(exc).__name__})
+
+
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    """Lambda handler for resume analysis.
+
+    Analyzes a resume PDF against a job description using Gemini AI.
+    Accepts either an S3 URL or bucket/key combination.
+    """
     request, error = _extract_request(event)
     if error:
         return _response(400, {"error": error})
@@ -259,14 +296,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         job_description = str(job_record["job_description"])
 
     try:
-        s3_url = request.get("s3_url")
-        if s3_url:
-            bucket, key = _parse_s3_url(str(s3_url))
-        else:
-            bucket = str(request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or "")
-            key = str(request.get("s3_key") or job_record.get("s3_key") or "")
-            if not bucket or not key:
-                return _response(400, {"error": "Provide 's3_url' or both 's3_bucket' and 's3_key'"})
+        location = _get_s3_location(request, job_record)
+        if isinstance(location, dict):
+            return location
+        bucket, key = location
 
         if job_id:
             _update_job_status(job_id, "processing")
@@ -286,13 +319,5 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "analysis_result": analysis,
             },
         )
-    except ClientError as exc:
-        message = f"S3 access error: {exc.response.get('Error', {}).get('Code', 'Unknown')}"
-        if job_id:
-            _update_job_status(job_id, "failed", error=message)
-        return _response(500, {"error": message})
-    except Exception as exc:
-        logger.exception("Analysis handler failed")
-        if job_id:
-            _update_job_status(job_id, "failed", error=str(exc))
-        return _response(500, {"error": str(exc), "type": type(exc).__name__})
+    except (ClientError, Exception) as exc:
+        return _handle_analysis_error(job_id, exc)
