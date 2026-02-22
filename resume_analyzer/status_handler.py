@@ -7,7 +7,7 @@ import boto3
 
 dynamodb = boto3.resource("dynamodb")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
 logger = logging.getLogger(__name__)

@@ -16,7 +16,7 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESULTS_TABLE", "test-results-table")
     monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    monkeypatch.setenv("CORS_ALLOW_ORIGIN", "https://app.example.com")
+    monkeypatch.setenv("CORS_ALLOW_ORIGIN", "*")
 
 
 @pytest.fixture

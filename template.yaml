@@ -1,7 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: AI Resume Analyzer using S3 presigned uploads and Gemini 3 Flash multimodal PDF analysis.
-
 Parameters:
   GoogleApiKey:
     Type: String
@@ -15,7 +14,7 @@ Parameters:
       - prod
   AllowedOrigin:
     Type: String
-    Default: https://app.example.com
+    Default: *
     Description: Frontend origin allowed by API and S3 CORS.
 
 Resources:

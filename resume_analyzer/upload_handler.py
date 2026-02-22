@@ -15,7 +15,7 @@ dynamodb = boto3.resource("dynamodb")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "https://app.example.com")
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 
