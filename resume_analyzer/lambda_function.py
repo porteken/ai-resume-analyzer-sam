@@ -103,7 +103,7 @@ def _coerce_string_list(value: Any) -> list[str]:
 
 def _normalize_analysis_result(analysis: Any) -> dict[str, Any]:
     if not isinstance(analysis, dict):
-        raise RuntimeError("Gemini returned invalid JSON object")
+        raise TypeError("Gemini returned invalid JSON object")
 
     normalized = dict(analysis)
     for field in ("strengths", "gaps", "recommendations"):
