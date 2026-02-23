@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-# Constant to avoid duplicate string literals
 CONTENT_TYPE_JSON = "application/json"
 
 
