@@ -8,6 +8,8 @@ from urllib.parse import unquote, urlparse
 
 import boto3
 from botocore.exceptions import ClientError
+from google import genai  # type: ignore[import-not-found]
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -158,14 +160,10 @@ def _download_pdf_bytes(bucket: str, key: str) -> bytes:
 
 
 def _get_genai_client() -> Any:
-    from google import genai  # type: ignore[import-not-found]
-
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
 def _get_genai_types() -> Any:
-    from google.genai import types
-
     return types
 
 

@@ -1,10 +1,35 @@
 """Pytest configuration and shared fixtures."""
 
 import json
+import sys
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
 import pytest
+
+
+class _FakePart:
+    @staticmethod
+    def from_bytes(data: bytes, mime_type: str) -> dict[str, Any]:
+        return {"data": data, "mime_type": mime_type}
+
+
+class _FakeGenerateContentConfig:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _FakeTypes:
+    Part = _FakePart
+    GenerateContentConfig = _FakeGenerateContentConfig
+
+
+class _FakeGenaiModule:
+    types = _FakeTypes()
+    Client = MagicMock()
+
+
+sys.modules["google.genai"] = _FakeGenaiModule()
 
 CONTENT_TYPE_JSON = "application/json"
 
