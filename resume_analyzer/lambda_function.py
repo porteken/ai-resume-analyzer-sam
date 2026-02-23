@@ -23,7 +23,6 @@ GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
 results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
-# JSON Schema for structured output. This schema is compatible with Pydantic models.
 RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -159,13 +158,13 @@ def _download_pdf_bytes(bucket: str, key: str) -> bytes:
 
 
 def _get_genai_client() -> Any:
-    from google import genai  # noqa: PLC0415  # type: ignore[import-not-found]
+    from google import genai  # type: ignore[import-not-found]
 
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 
 def _get_genai_types() -> Any:
-    from google.genai import types  # noqa: PLC0415
+    from google.genai import types
 
     return types
 
@@ -177,7 +176,6 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
 
     types = _get_genai_types()
 
-    # Keep the schema object in `response_schema`; SDK sends JSON Schema via `response_json_schema`.
     response_schema = RESUME_ANALYSIS_RESPONSE_SCHEMA
     prompt = (
         "Analyze this resume PDF against the provided job description and return JSON only. "
@@ -194,7 +192,6 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
-            # JSON Schema registration for structured outputs.
             response_json_schema=response_schema,
             temperature=0.2,
         ),
