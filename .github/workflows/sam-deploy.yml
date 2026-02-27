@@ -11,10 +11,6 @@ on:
       - 'prd'
   workflow_dispatch:       # manual trigger
 
-permissions:
-  contents: read
-  id-token: write          # for OIDC
-
 concurrency:
   group: sam-deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -28,6 +24,8 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +65,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'push'   # deploy only on push, not on PR
+    permissions:
+      contents: read
+      id-token: write          # for OIDC
     concurrency:
       group: sam-deploy-shared-api
       cancel-in-progress: false

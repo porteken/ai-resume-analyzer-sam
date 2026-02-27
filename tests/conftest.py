@@ -2,6 +2,7 @@
 
 import json
 import sys
+from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock, Mock
 
@@ -19,17 +20,13 @@ class _FakeGenerateContentConfig:
         self.__dict__.update(kwargs)
 
 
-class _FakeTypes:
-    Part = _FakePart
-    GenerateContentConfig = _FakeGenerateContentConfig
-
-
-class _FakeGenaiModule:
-    types = _FakeTypes()
-    Client = MagicMock()
-
-
-sys.modules["google.genai"] = _FakeGenaiModule()
+_fake_genai_module: Any = ModuleType("google.genai")
+_fake_types_module: Any = ModuleType("google.genai.types")
+_fake_types_module.Part = _FakePart
+_fake_types_module.GenerateContentConfig = _FakeGenerateContentConfig
+_fake_genai_module.types = _fake_types_module
+_fake_genai_module.Client = MagicMock()
+sys.modules["google.genai"] = _fake_genai_module
 
 CONTENT_TYPE_JSON = "application/json"
 
