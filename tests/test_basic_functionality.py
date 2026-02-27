@@ -59,7 +59,6 @@ class TestJSONSerialization:
         json_str = json.dumps(response_data)
         assert isinstance(json_str, str)
 
-
         parsed = json.loads(json_str)
         assert parsed["job_id"] == "test-123"
         assert parsed["status"] == "processing"
@@ -117,19 +116,19 @@ class TestResponseStructure:
 class TestStatusCodes:
     """Test HTTP status code logic."""
 
-    def test_status_code_ranges(self) -> None:
+    @pytest.mark.parametrize(
+        ("status_code", "lower_bound", "upper_bound"),
+        [
+            (200, 200, 300),
+            (202, 200, 300),
+            (400, 400, 500),
+            (404, 400, 500),
+            (500, 500, 600),
+        ],
+    )
+    def test_status_code_ranges(self, status_code: int, lower_bound: int, upper_bound: int) -> None:
         """Test understanding of HTTP status code ranges."""
-        success = 200
-        accepted = 202
-        bad_request = 400
-        not_found = 404
-        server_error = 500
-
-        assert 200 <= success < 300
-        assert 200 <= accepted < 300
-        assert 400 <= bad_request < 500
-        assert 400 <= not_found < 500
-        assert 500 <= server_error < 600
+        assert lower_bound <= status_code < upper_bound
 
     def test_appropriate_status_for_scenarios(self) -> None:
         """Test mapping scenarios to status codes."""
@@ -175,7 +174,6 @@ class TestStringManipulation:
         """Test awareness of metadata limits."""
         job_description = "x" * 3000
         filename = "y" * 300
-
 
         safe_job_desc = job_description[:2000]
         safe_filename = filename[:256]
@@ -233,7 +231,6 @@ class TestDataTypes:
         """Test safe dictionary access."""
         data = {"key1": "value1"}
 
-
         value1 = data.get("key1", "default")
         value2 = data.get("key2", "default")
 
@@ -243,7 +240,6 @@ class TestDataTypes:
     def test_none_handling(self) -> None:
         """Test handling of None values."""
         value = None
-
 
         assert not value
 
