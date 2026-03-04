@@ -49,10 +49,14 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     logger.info("Upload handler invoked")
 
     if not RESUME_BUCKET:
-        return _response(500, {"error": "RESUME_BUCKET environment variable not configured"})
+        return _response(
+            500, {"error": "RESUME_BUCKET environment variable not configured"}
+        )
 
     if not results_table:
-        return _response(500, {"error": "RESULTS_TABLE environment variable not configured"})
+        return _response(
+            500, {"error": "RESULTS_TABLE environment variable not configured"}
+        )
 
     if "body" not in event:
         return _response(400, {"error": "No body in request"})
@@ -68,7 +72,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return _response(400, {"error": "Invalid JSON body"})
 
         filename = _sanitize_filename(str(body.get("filename", "resume.pdf")))
-        job_description = str(body.get("job_description", "General resume analysis")).strip()
+        job_description = str(
+            body.get("job_description", "General resume analysis")
+        ).strip()
 
         job_id = str(uuid.uuid4())
         s3_key = f"uploads/{job_id}/{filename}"

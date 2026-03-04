@@ -1,15 +1,15 @@
 name: SAM Build and Deploy
 
 on:
-  pull_request:            # build validation on PRs
+  pull_request:            
     branches:
       - 'dev'
       - 'prd'
-  push:                    # full workflow on push only for dev/prd
+  push:                    
     branches:
       - 'dev'
       - 'prd'
-  workflow_dispatch:       # manual trigger
+  workflow_dispatch:       
 
 concurrency:
   group: sam-deploy-${{ github.ref }}
@@ -60,14 +60,32 @@ jobs:
       - name: Build SAM application
         run: sam build --use-container --template template.yaml
 
-  deploy:
-    name: Deploy
-    needs: build
+  sonarqube:
+    name: SonarQube
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'   # deploy only on push, not on PR
     permissions:
       contents: read
-      id-token: write          # for OIDC
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  deploy:
+    name: Deploy
+    needs:
+      - build
+      - sonarqube
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'   
+    permissions:
+      contents: read
+      id-token: write          
     concurrency:
       group: sam-deploy-shared-api
       cancel-in-progress: false
