@@ -8,8 +8,7 @@ from urllib.parse import unquote, urlparse
 
 import boto3
 from botocore.exceptions import ClientError
-from google import genai  # type: ignore[import-not-found]
-from google.genai import types
+from google.genai import Client, types
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +159,7 @@ def _download_pdf_bytes(bucket: str, key: str) -> bytes:
 
 
 def _get_genai_client() -> Any:
-    return genai.Client(api_key=GOOGLE_API_KEY)
+    return Client(api_key=GOOGLE_API_KEY)
 
 
 def _get_genai_types() -> Any:
@@ -282,10 +281,14 @@ def _get_s3_location(
         bucket, key = _parse_s3_url(str(s3_url))
         return bucket, key
 
-    bucket = str(request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or "")
+    bucket = str(
+        request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or ""
+    )
     key = str(request.get("s3_key") or job_record.get("s3_key") or "")
     if not bucket or not key:
-        return _response(400, {"error": "Provide 's3_url' or both 's3_bucket' and 's3_key'"})
+        return _response(
+            400, {"error": "Provide 's3_url' or both 's3_bucket' and 's3_key'"}
+        )
     return bucket, key
 
 
@@ -309,13 +312,17 @@ def _is_upstream_unavailable_error(exc: Exception) -> bool:
         "'code': 503",
         '"code": 503',
     )
-    return type_name == "ServerError" or any(marker in message for marker in unavailable_markers)
+    return type_name == "ServerError" or any(
+        marker in message for marker in unavailable_markers
+    )
 
 
 def _handle_analysis_error(job_id: str | None, exc: Exception) -> dict[str, Any]:
     """Handle analysis errors and return appropriate response."""
     if isinstance(exc, ClientError):
-        message = f"S3 access error: {exc.response.get('Error', {}).get('Code', 'Unknown')}"
+        message = (
+            f"S3 access error: {exc.response.get('Error', {}).get('Code', 'Unknown')}"
+        )
         if job_id:
             _update_job_status(job_id, "failed", error=message)
         return _response(500, {"error": message})

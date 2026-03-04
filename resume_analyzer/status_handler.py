@@ -86,7 +86,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
         if item.get("status") == "completed":
-            result["analysis_result"] = _normalize_analysis_result(item.get("analysis_result"))
+            result["analysis_result"] = _normalize_analysis_result(
+                item.get("analysis_result")
+            )
         elif item.get("status") == "failed":
             result["error"] = item.get("error")
 

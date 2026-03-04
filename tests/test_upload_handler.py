@@ -35,14 +35,27 @@ class TestUploadHandler:
     """Tests for S3 presigned upload URL generation."""
 
     def test_generate_presigned_upload(
-        self, upload_handler_module, sample_upload_event, mock_lambda_context, mock_boto3_clients
+        self,
+        upload_handler_module,
+        sample_upload_event,
+        mock_lambda_context,
+        mock_boto3_clients,
     ) -> None:
-        response = upload_handler_module.lambda_handler(sample_upload_event, mock_lambda_context)
+        response = upload_handler_module.lambda_handler(
+            sample_upload_event, mock_lambda_context
+        )
 
         body = assert_success_response(
             response,
             200,
-            required_fields=["job_id", "status", "s3_key", "s3_url", "upload", "expires_in"],
+            required_fields=[
+                "job_id",
+                "status",
+                "s3_key",
+                "s3_url",
+                "upload",
+                "expires_in",
+            ],
         )
 
         assert body["status"] == "upload_pending"
@@ -81,16 +94,26 @@ class TestUploadHandler:
             ({"body": "not-json", "isBase64Encoded": False}, "Invalid JSON format"),
         ],
     )
-    def test_bad_requests(self, upload_handler_module, mock_lambda_context, event, message) -> None:
+    def test_bad_requests(
+        self, upload_handler_module, mock_lambda_context, event, message
+    ) -> None:
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
         assert_error_response(response, 400, message)
 
     def test_presigned_generation_failure(
-        self, upload_handler_module, sample_upload_event, mock_lambda_context, mock_boto3_clients
+        self,
+        upload_handler_module,
+        sample_upload_event,
+        mock_lambda_context,
+        mock_boto3_clients,
     ) -> None:
-        mock_boto3_clients["s3"].generate_presigned_post.side_effect = Exception("S3 failure")
+        mock_boto3_clients["s3"].generate_presigned_post.side_effect = Exception(
+            "S3 failure"
+        )
 
-        response = upload_handler_module.lambda_handler(sample_upload_event, mock_lambda_context)
+        response = upload_handler_module.lambda_handler(
+            sample_upload_event, mock_lambda_context
+        )
         assert_error_response(response, 500, "S3 failure")
 
     def test_sanitize_filename_adds_pdf_extension(self, upload_handler_module) -> None:
@@ -101,7 +124,9 @@ class TestUploadHandler:
         result = upload_handler_module._sanitize_filename("")
         assert result == "resume.pdf"
 
-    def test_resume_bucket_not_configured(self, upload_handler_module, mock_lambda_context) -> None:
+    def test_resume_bucket_not_configured(
+        self, upload_handler_module, mock_lambda_context
+    ) -> None:
         original = upload_handler_module.RESUME_BUCKET
         upload_handler_module.RESUME_BUCKET = None
         try:
@@ -111,7 +136,9 @@ class TestUploadHandler:
         finally:
             upload_handler_module.RESUME_BUCKET = original
 
-    def test_results_table_not_configured(self, upload_handler_module, mock_lambda_context) -> None:
+    def test_results_table_not_configured(
+        self, upload_handler_module, mock_lambda_context
+    ) -> None:
         original = upload_handler_module.results_table
         upload_handler_module.results_table = None
         try:
@@ -130,7 +157,9 @@ class TestUploadHandler:
         encoded = base64.b64encode(payload.encode()).decode()
         event = {"body": encoded, "isBase64Encoded": True}
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
-        body = assert_success_response(response, 200, required_fields=["job_id", "s3_key"])
+        body = assert_success_response(
+            response, 200, required_fields=["job_id", "s3_key"]
+        )
         assert "test.pdf" in body["s3_key"]
 
     def test_body_not_dict(self, upload_handler_module, mock_lambda_context) -> None:

@@ -99,9 +99,13 @@ class TestGeminiAnalysis:
         sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
     ) -> None:
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            sample_analyze_event, mock_lambda_context
+        )
 
-        body = assert_success_response(response, 200, required_fields=["analysis_result", "s3_key"])
+        body = assert_success_response(
+            response, 200, required_fields=["analysis_result", "s3_key"]
+        )
         analysis = body["analysis_result"]
 
         assert analysis["name"] == "Jane Doe"
@@ -111,7 +115,9 @@ class TestGeminiAnalysis:
         assert "gaps" in analysis
         assert "recommendations" in analysis
 
-        call_args = lambda_function_module._get_genai_client().models.generate_content.call_args[1]
+        call_args = lambda_function_module._get_genai_client().models.generate_content.call_args[
+            1
+        ]
         assert call_args["model"] == "gemini-2.5-flash"
 
         config = call_args["config"]
@@ -126,25 +132,27 @@ class TestGeminiAnalysis:
         sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
     ) -> None:
-        lambda_function_module._get_genai_client().models.generate_content.return_value.text = (
-            json.dumps(
-                {
-                    "name": "Jane Doe",
-                    "contact_info": {
-                        "email": "",
-                        "phone": "",
-                        "location": "",
-                        "linkedin": "",
-                    },
-                    "summary": "",
-                    "skills": [],
-                    "experience": [],
-                }
-            )
+        lambda_function_module._get_genai_client().models.generate_content.return_value.text = json.dumps(
+            {
+                "name": "Jane Doe",
+                "contact_info": {
+                    "email": "",
+                    "phone": "",
+                    "location": "",
+                    "linkedin": "",
+                },
+                "summary": "",
+                "skills": [],
+                "experience": [],
+            }
         )
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        body = assert_success_response(response, 200, required_fields=["analysis_result"])
+        response = lambda_function_module.lambda_handler(
+            sample_analyze_event, mock_lambda_context
+        )
+        body = assert_success_response(
+            response, 200, required_fields=["analysis_result"]
+        )
         analysis = body["analysis_result"]
 
         assert analysis["strengths"] == []
@@ -155,7 +163,9 @@ class TestGeminiAnalysis:
         self, lambda_function_module: Any, mock_lambda_context: Any
     ) -> None:
         event = {
-            "body": json.dumps({"job_id": "test-job-123", "job_description": "Python dev"}),
+            "body": json.dumps(
+                {"job_id": "test-job-123", "job_description": "Python dev"}
+            ),
             "isBase64Encoded": False,
         }
 
@@ -172,7 +182,9 @@ class TestGeminiAnalysis:
             "not json"
         )
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            sample_analyze_event, mock_lambda_context
+        )
         body = assert_error_response(response, 500)
 
         assert "non-JSON" in body["error"]
@@ -186,7 +198,9 @@ class TestGeminiAnalysis:
         error = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         lambda_function_module.s3_client.get_object.side_effect = error
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            sample_analyze_event, mock_lambda_context
+        )
         assert_error_response(response, 500, "S3 access error")
 
     def test_parse_s3_url_variants(self, lambda_function_module: Any) -> None:
@@ -197,13 +211,19 @@ class TestGeminiAnalysis:
         assert bucket == "test-resume-bucket"
         assert key == "uploads/a/resume.pdf"
 
-    def test_parse_s3_url_https_without_amazonaws(self, lambda_function_module: Any) -> None:
+    def test_parse_s3_url_https_without_amazonaws(
+        self, lambda_function_module: Any
+    ) -> None:
         with pytest.raises(ValueError, match="valid s3://"):
             lambda_function_module._parse_s3_url("https://example.com/bucket/key.pdf")
 
-    def test_parse_s3_url_https_path_style_invalid_path(self, lambda_function_module: Any) -> None:
+    def test_parse_s3_url_https_path_style_invalid_path(
+        self, lambda_function_module: Any
+    ) -> None:
         with pytest.raises(ValueError, match="Invalid S3 path-style URL"):
-            lambda_function_module._parse_s3_url("https://s3.us-east-1.amazonaws.com/bucket-only")
+            lambda_function_module._parse_s3_url(
+                "https://s3.us-east-1.amazonaws.com/bucket-only"
+            )
 
     def test_parse_s3_url_invalid_format(self, lambda_function_module: Any) -> None:
         with pytest.raises(ValueError, match="valid s3://"):
@@ -247,7 +267,9 @@ class TestGeminiAnalysis:
     def test_update_job_status_exception(
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
     ) -> None:
-        mock_boto3_clients["dynamodb_table"].update_item.side_effect = Exception("DB error")
+        mock_boto3_clients["dynamodb_table"].update_item.side_effect = Exception(
+            "DB error"
+        )
         lambda_function_module._update_job_status("job-123", "completed")
 
     def test_get_job_record_no_table(self, lambda_function_module: Any) -> None:
@@ -262,7 +284,9 @@ class TestGeminiAnalysis:
     def test_get_job_record_exception(
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
     ) -> None:
-        mock_boto3_clients["dynamodb_table"].get_item.side_effect = Exception("DB error")
+        mock_boto3_clients["dynamodb_table"].get_item.side_effect = Exception(
+            "DB error"
+        )
         result = lambda_function_module._get_job_record("job-123")
         assert result == {}
 
@@ -346,7 +370,9 @@ class TestGeminiAnalysis:
         mock_boto3_clients["s3"].get_object.side_effect = ClientError(
             {"Error": {"Code": "AccessDenied"}}, "GetObject"
         )
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            sample_analyze_event, mock_lambda_context
+        )
         assert_error_response(response, 500)
         calls = mock_boto3_clients["dynamodb_table"].update_item.call_args_list
         statuses = [c[1]["ExpressionAttributeValues"][":status"] for c in calls]
@@ -360,7 +386,9 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         mock_boto3_clients["s3"].get_object.side_effect = Exception("Unexpected error")
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            sample_analyze_event, mock_lambda_context
+        )
         assert_error_response(response, 500)
         calls = mock_boto3_clients["dynamodb_table"].update_item.call_args_list
         statuses = [c[1]["ExpressionAttributeValues"][":status"] for c in calls]

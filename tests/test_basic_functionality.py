@@ -54,7 +54,11 @@ class TestJSONSerialization:
 
     def test_json_dumps_response(self) -> None:
         """Test creating JSON response."""
-        response_data = {"job_id": "test-123", "status": "processing", "message": "Success"}
+        response_data = {
+            "job_id": "test-123",
+            "status": "processing",
+            "message": "Success",
+        }
 
         json_str = json.dumps(response_data)
         assert isinstance(json_str, str)
@@ -126,7 +130,9 @@ class TestStatusCodes:
             (500, 500, 600),
         ],
     )
-    def test_status_code_ranges(self, status_code: int, lower_bound: int, upper_bound: int) -> None:
+    def test_status_code_ranges(
+        self, status_code: int, lower_bound: int, upper_bound: int
+    ) -> None:
         """Test understanding of HTTP status code ranges."""
         assert lower_bound <= status_code < upper_bound
 

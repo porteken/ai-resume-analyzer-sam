@@ -8,7 +8,9 @@ import time
 
 import requests
 
-API_ENDPOINT = os.environ.get("API_ENDPOINT", sys.argv[1] if len(sys.argv) > 1 else None)
+API_ENDPOINT = os.environ.get(
+    "API_ENDPOINT", sys.argv[1] if len(sys.argv) > 1 else None
+)
 API_KEY = os.environ.get("API_KEY", sys.argv[2] if len(sys.argv) > 2 else None)
 PDF_FILE = sys.argv[3] if len(sys.argv) > 3 else "resume.pdf"
 JOB_DESCRIPTION = """
@@ -23,7 +25,9 @@ What Were Looking For
 """
 
 if not API_ENDPOINT or not API_KEY:
-    print("Usage: python test_api.py <API_ENDPOINT> <API_KEY> [PDF_FILE] [JOB_DESCRIPTION]")
+    print(
+        "Usage: python test_api.py <API_ENDPOINT> <API_KEY> [PDF_FILE] [JOB_DESCRIPTION]"
+    )
     sys.exit(1)
 API_BASE = API_ENDPOINT.rstrip("/").replace("/upload", "").replace("/analyze", "")
 
@@ -62,7 +66,9 @@ try:
     print(f"Payload size: {payload_size} bytes")
     print()
 
-    upload_response = requests.post(upload_url, headers=headers, json=upload_payload, timeout=30)
+    upload_response = requests.post(
+        upload_url, headers=headers, json=upload_payload, timeout=30
+    )
 
     upload_duration = time.time() - upload_start
 
@@ -119,7 +125,9 @@ while poll_count < max_polls:
     elapsed = time.time() - poll_start
 
     try:
-        status_response = requests.get(status_url, headers={"x-api-key": API_KEY}, timeout=10)
+        status_response = requests.get(
+            status_url, headers={"x-api-key": API_KEY}, timeout=10
+        )
 
         if status_response.status_code != 200:
             print(f"ERROR: Status check failed with code {status_response.status_code}")
