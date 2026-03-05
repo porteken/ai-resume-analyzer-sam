@@ -117,11 +117,22 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+  quality-gate:
+    name: Quality Gate
+    needs:
+      - sonarqube
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Quality checks completed
+        run: echo "Quality checks passed."
+
   deploy:
     name: Deploy
     needs:
       - build
-      - sonarqube
+      - quality-gate
     runs-on: ubuntu-latest
     if: github.event_name == 'push'   
     permissions:
