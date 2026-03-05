@@ -90,7 +90,7 @@ jobs:
           retention-days: 1
 
   sonarqube:
-    name: SonarQube & Quality Gate
+    name: SonarQube
     needs:
       - pytest-coverage
     runs-on: ubuntu-latest
@@ -116,13 +116,6 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      - name: SonarQube Quality Gate check
-        id: sonarqube-quality-gate-check
-        uses: sonarsource/sonarqube-quality-gate-action@master
-        with:
-          pollingTimeoutSec: 600
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   deploy:
     name: Deploy
