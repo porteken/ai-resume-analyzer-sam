@@ -15,6 +15,7 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   SHARED_REST_API_ID: ${{ vars.SHARED_REST_API_ID || 'tbitqsc1li' }}
   ALLOWED_ORIGIN: ${{ vars.ALLOWED_ORIGIN || '*' }}
+  ENABLE_S3_ACCESS_LOGGING: ${{ vars.ENABLE_S3_ACCESS_LOGGING || 'false' }}
   PYTHON_VERSION: '3.11'
 
 jobs:
@@ -199,6 +200,7 @@ jobs:
             "ApiStageName=$API_STAGE_NAME"
             "ExistingApiId=$SHARED_REST_API_ID"
             "AllowedOrigin=$ALLOWED_ORIGIN"
+            "EnableS3AccessLogging=$ENABLE_S3_ACCESS_LOGGING"
           )
           
           if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
