@@ -12,7 +12,6 @@ on:
   workflow_dispatch:       
 
 concurrency:
-  # Cancel stale runs on PRs, but let pushes to dev/prd queue up safely
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -36,7 +35,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip' # Replaces manual pip caching
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
@@ -53,7 +51,6 @@ jobs:
       - name: Build SAM application
         run: sam build --use-container --template template.yaml
 
-      # Upload the built artifact so we don't have to build it again in deploy
       - name: Upload SAM Build Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -93,7 +90,7 @@ jobs:
           retention-days: 1
 
   sonarqube:
-    name: SonarQube
+    name: SonarQube & Quality Gate
     needs:
       - pytest-coverage
     runs-on: ubuntu-latest
@@ -120,16 +117,6 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  quality-gate:
-    name: Quality Gate
-    needs:
-      - sonarqube
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      # Optional: To actually block the pipeline if Sonar fails, use the official action below.
-      # Note: Requires SonarQube webhooks to be configured in your Sonar instance pointing to GitHub.
       - name: Check SonarQube Quality Gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
@@ -140,21 +127,19 @@ jobs:
     name: Deploy
     needs:
       - build
-      - quality-gate
+      - sonarqube
     runs-on: ubuntu-latest
     if: github.event_name == 'push'   
     permissions:
       contents: read
       id-token: write          
     concurrency:
-      # Safely isolate dev vs prd deployments
       group: sam-deploy-${{ github.ref }}
       cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
 
-      # Download the pre-built SAM directory so we don't have to rebuild (and miss layer dependencies)
       - name: Download SAM Build Artifact
         uses: actions/download-artifact@v4
         with:
@@ -243,7 +228,6 @@ jobs:
             --no-fail-on-empty-changeset
 
       - name: Sync shared API routes and deploy stage
-        # TIP: Consider moving this 100-line script to `.github/scripts/sync-api.sh` and running `bash .github/scripts/sync-api.sh` to keep your YAML clean.
         run: |
           set -euo pipefail
 
