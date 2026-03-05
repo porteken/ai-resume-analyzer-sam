@@ -72,7 +72,10 @@ jobs:
           fetch-depth: 0  
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@${{ github.sha }}
+        uses: SonarSource/sonarqube-scan-action@v4
+        with:
+          args: >
+            -Dsonar.scm.revision=${{ github.sha }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
