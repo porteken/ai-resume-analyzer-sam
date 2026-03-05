@@ -37,7 +37,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
+        uses: aws-actions/setup-sam@d78e1a4a9656d3b223e59b80676a797f20093133
         with:
           use-installer: true
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -125,13 +125,13 @@ jobs:
           path: .aws-sam/
 
       - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
+        uses: aws-actions/setup-sam@d78e1a4a9656d3b223e59b80676a797f20093133
         with:
           use-installer: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
