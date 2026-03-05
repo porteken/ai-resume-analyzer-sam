@@ -63,6 +63,7 @@ jobs:
           retention-days: 1
           # 2. NEW: Force the build to fail immediately if the folder is missing or unreadable
           if-no-files-found: error
+          include-hidden-files: true
 
   pytest-coverage:
     name: Pytest Coverage
