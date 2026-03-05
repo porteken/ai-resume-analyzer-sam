@@ -19,7 +19,7 @@ env:
 
 jobs:
   # ==========================================
-  # JOB 1: BUILD
+  # EXECUTION BRANCH A: BUILD SAM
   # ==========================================
   build:
     name: Build SAM Application
@@ -64,10 +64,10 @@ jobs:
           include-hidden-files: true
 
   # ==========================================
-  # JOB 2: PYTEST & COVERAGE
+  # EXECUTION BRANCH B: TEST & SCAN
   # ==========================================
-  pytest-coverage:
-    name: Pytest Coverage
+  test-and-scan:
+    name: Pytest & SonarQube Scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,6 +75,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for accurate SonarQube analysis
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -90,36 +92,6 @@ jobs:
       - name: Run Pytest with Coverage
         run: pytest
 
-      - name: Upload Coverage Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-coverage-xml
-          path: coverage.xml
-          retention-days: 1
-          if-no-files-found: error
-
-  # ==========================================
-  # JOB 3: SONARQUBE
-  # ==========================================
-  sonarqube:
-    name: SonarQube Scan
-    needs: [pytest-coverage]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  
-
-      - name: Download Pytest Coverage Report
-        uses: actions/download-artifact@v4
-        with:
-          name: pytest-coverage-xml
-          path: .
-
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
         with:
@@ -128,11 +100,11 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # ==========================================
-  # JOB 4: DEPLOY (Only on Push)
+  # CONVERGENCE: DEPLOY TO AWS
   # ==========================================
   deploy:
     name: Deploy to AWS
-    needs: [build, sonarqube]
+    needs: [build, test-and-scan] # <--- Waits for both Branches A and B to finish
     runs-on: ubuntu-latest
     if: github.event_name == 'push'   
     permissions:
@@ -285,7 +257,7 @@ jobs:
             local path_part="$2"
             aws apigateway get-resources \
               --rest-api-id "$REST_API_ID" \
-              --query "items[?parentId=='${parent_id}' && pathPart=='${path_part}'].id | [0]" \
+              --query "items[?parentId=='${parent_id}' && pathPart=='${path_part}'].id |[0]" \
               --output text
           }
 
