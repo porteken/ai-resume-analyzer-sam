@@ -163,31 +163,71 @@ jobs:
       - name: Recover Broken Stack State
         run: |
           set -euo pipefail
-          
-          # Fetch current stack status
-          STACK_STATUS=$(aws cloudformation describe-stacks \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].StackStatus' \
-            --output text 2>&1) || STACK_STATUS=""
-            
+
+          get_stack_status() {
+            aws cloudformation describe-stacks \
+              --stack-name "$SAM_STACK_NAME" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].StackStatus' \
+              --output text 2>/dev/null || true
+          }
+
+          print_recent_events() {
+            aws cloudformation describe-stack-events \
+              --stack-name "$SAM_STACK_NAME" \
+              --region "$AWS_REGION" \
+              --max-items 20 \
+              --query 'StackEvents[].{Time:Timestamp,Resource:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
+              --output table || true
+          }
+
+          STACK_STATUS="$(get_stack_status)"
+          if [[ -z "$STACK_STATUS" ]]; then
+            echo "Stack does not exist. No recovery needed."
+            exit 0
+          fi
+
           echo "Current stack status: $STACK_STATUS"
 
           case "$STACK_STATUS" in
             ROLLBACK_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_FAILED)
               echo "Detected broken CF stack ($STACK_STATUS). Cleaning up..."
-              
-              aws cloudformation delete-stack \
+
+              if [[ "$STACK_STATUS" == "DELETE_FAILED" ]]; then
+                if ! aws cloudformation delete-stack \
+                  --stack-name "$SAM_STACK_NAME" \
+                  --region "$AWS_REGION" \
+                  --deletion-mode FORCE_DELETE_STACK; then
+                  echo "FORCE_DELETE_STACK failed or unsupported. Retrying standard delete."
+                  aws cloudformation delete-stack \
+                    --stack-name "$SAM_STACK_NAME" \
+                    --region "$AWS_REGION"
+                fi
+              else
+                aws cloudformation delete-stack \
+                  --stack-name "$SAM_STACK_NAME" \
+                  --region "$AWS_REGION"
+              fi
+
+              if ! aws cloudformation wait stack-delete-complete \
                 --stack-name "$SAM_STACK_NAME" \
-                --region "$AWS_REGION"
-                
-              aws cloudformation wait stack-delete-complete \
-                --stack-name "$SAM_STACK_NAME" \
-                --region "$AWS_REGION" || true
+                --region "$AWS_REGION"; then
+                echo "Stack deletion did not complete. Recent events:"
+                print_recent_events
+              fi
+
+              REMAINING_STATUS="$(get_stack_status)"
+              if [[ -n "$REMAINING_STATUS" ]]; then
+                echo "Stack still exists with status: $REMAINING_STATUS"
+                echo "Unable to continue deploy safely."
+                print_recent_events
+                exit 1
+              fi
+
+              echo "Stack cleanup completed."
               ;;
             *)
               echo "No stack recovery needed."
-              exit 0
               ;;
           esac
 
