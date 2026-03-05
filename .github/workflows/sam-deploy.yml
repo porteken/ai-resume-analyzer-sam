@@ -12,13 +12,15 @@ on:
   workflow_dispatch:       
 
 concurrency:
-  group: sam-deploy-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel stale runs on PRs, but let pushes to dev/prd queue up safely
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   SHARED_REST_API_ID: ${{ vars.SHARED_REST_API_ID || 'tbitqsc1li' }}
   ALLOWED_ORIGIN: ${{ vars.ALLOWED_ORIGIN || '*' }}
+  PYTHON_VERSION: '3.11'
 
 jobs:
   build:
@@ -33,17 +35,8 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Cache Python deps + build artifacts
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/pip
-            .aws-sam/build
-          key: ${{ runner.os }}-sam-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-sam-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip' # Replaces manual pip caching
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
@@ -60,6 +53,14 @@ jobs:
       - name: Build SAM application
         run: sam build --use-container --template template.yaml
 
+      # Upload the built artifact so we don't have to build it again in deploy
+      - name: Upload SAM Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-artifact
+          path: .aws-sam/
+          retention-days: 1
+
   pytest-coverage:
     name: Pytest Coverage
     runs-on: ubuntu-latest
@@ -72,7 +73,8 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
       - name: Install test dependencies
         run: |
@@ -88,6 +90,7 @@ jobs:
           name: pytest-coverage-xml
           path: coverage.xml
           if-no-files-found: error
+          retention-days: 1
 
   sonarqube:
     name: SonarQube
@@ -109,7 +112,7 @@ jobs:
           path: .
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
         with:
           args: >
             -Dsonar.scm.revision=${{ github.sha }}
@@ -125,8 +128,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Quality checks completed
-        run: echo "Quality checks passed."
+      # Optional: To actually block the pipeline if Sonar fails, use the official action below.
+      # Note: Requires SonarQube webhooks to be configured in your Sonar instance pointing to GitHub.
+      - name: Check SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   deploy:
     name: Deploy
@@ -139,25 +147,25 @@ jobs:
       contents: read
       id-token: write          
     concurrency:
-      group: sam-deploy-shared-api
+      # Safely isolate dev vs prd deployments
+      group: sam-deploy-${{ github.ref }}
       cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      # Download the pre-built SAM directory so we don't have to rebuild (and miss layer dependencies)
+      - name: Download SAM Build Artifact
+        uses: actions/download-artifact@v4
         with:
-          python-version: '3.11'
+          name: sam-build-artifact
+          path: .aws-sam/
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build SAM application for deploy
-        run: sam build --use-container --template template.yaml
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v5
@@ -184,7 +192,6 @@ jobs:
               ;;
             *)
               echo "Refusing deploy from unsupported branch: $BRANCH_NAME"
-              echo "Only pushes to dev or prd may deploy."
               exit 1
               ;;
           esac
@@ -202,6 +209,8 @@ jobs:
           case "$STACK_STATUS" in
             ROLLBACK_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_FAILED)
               echo "Detected broken CF stack ($STACK_STATUS). Cleaning up..."
+              aws cloudformation delete-stack --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION"
+              aws cloudformation wait stack-delete-complete --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION" || true
               ;;
             *)
               echo "No stack recovery needed."
@@ -209,18 +218,7 @@ jobs:
               ;;
           esac
 
-          delete_and_wait() {
-            aws cloudformation delete-stack \
-              --stack-name "$SAM_STACK_NAME" \
-              --region "$AWS_REGION"
-            aws cloudformation wait stack-delete-complete \
-              --stack-name "$SAM_STACK_NAME" \
-              --region "$AWS_REGION"
-          }
-
-          delete_and_wait || true
-
-      - name: Build and Deploy
+      - name: Deploy SAM application
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
@@ -245,6 +243,7 @@ jobs:
             --no-fail-on-empty-changeset
 
       - name: Sync shared API routes and deploy stage
+        # TIP: Consider moving this 100-line script to `.github/scripts/sync-api.sh` and running `bash .github/scripts/sync-api.sh` to keep your YAML clean.
         run: |
           set -euo pipefail
 
@@ -262,27 +261,17 @@ jobs:
 
           normalize_id() {
             local value="${1:-}"
-            if [[ -z "$value" || "$value" == "None" || "$value" == "null" ]]; then
-              echo ""
-            else
-              echo "$value"
-            fi
+            if [[ -z "$value" || "$value" == "None" || "$value" == "null" ]]; then echo ""; else echo "$value"; fi
           }
 
           get_root_resource_id() {
-            aws apigateway get-resources \
-              --rest-api-id "$REST_API_ID" \
-              --query "items[?path=='/'].id | [0]" \
-              --output text
+            aws apigateway get-resources --rest-api-id "$REST_API_ID" --query "items[?path=='/'].id | [0]" --output text
           }
 
           get_child_resource_id() {
             local parent_id="$1"
             local path_part="$2"
-            aws apigateway get-resources \
-              --rest-api-id "$REST_API_ID" \
-              --query "items[?parentId=='${parent_id}' && pathPart=='${path_part}'].id | [0]" \
-              --output text
+            aws apigateway get-resources --rest-api-id "$REST_API_ID" --query "items[?parentId=='${parent_id}' && pathPart=='${path_part}'].id | [0]" --output text
           }
 
           ensure_child_resource() {
@@ -294,13 +283,7 @@ jobs:
               echo "$resource_id"
               return 0
             fi
-
-            aws apigateway create-resource \
-              --rest-api-id "$REST_API_ID" \
-              --parent-id "$parent_id" \
-              --path-part "$path_part" \
-              --query 'id' \
-              --output text
+            aws apigateway create-resource --rest-api-id "$REST_API_ID" --parent-id "$parent_id" --path-part "$path_part" --query 'id' --output text
           }
 
           ensure_method_exists() {
@@ -308,26 +291,12 @@ jobs:
             local http_method="$2"
             local request_parameters="${3:-}"
 
-            if aws apigateway get-method \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method "$http_method" >/dev/null 2>&1; then
-              return 0
-            fi
+            if aws apigateway get-method --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method "$http_method" >/dev/null 2>&1; then return 0; fi
 
             if [[ -n "$request_parameters" ]]; then
-              aws apigateway put-method \
-                --rest-api-id "$REST_API_ID" \
-                --resource-id "$resource_id" \
-                --http-method "$http_method" \
-                --authorization-type NONE \
-                --request-parameters "$request_parameters" >/dev/null
+              aws apigateway put-method --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method "$http_method" --authorization-type NONE --request-parameters "$request_parameters" >/dev/null
             else
-              aws apigateway put-method \
-                --rest-api-id "$REST_API_ID" \
-                --resource-id "$resource_id" \
-                --http-method "$http_method" \
-                --authorization-type NONE >/dev/null
+              aws apigateway put-method --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method "$http_method" --authorization-type NONE >/dev/null
             fi
           }
 
@@ -340,40 +309,16 @@ jobs:
 
             ensure_method_exists "$resource_id" "$http_method"
 
-            aws apigateway put-integration \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method "$http_method" \
-              --type AWS_PROXY \
-              --integration-http-method POST \
-              --uri "$integration_uri" >/dev/null
+            aws apigateway put-integration --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method "$http_method" --type AWS_PROXY --integration-http-method POST --uri "$integration_uri" >/dev/null
           }
 
           ensure_cors_options() {
             local resource_id="$1"
-
             ensure_method_exists "$resource_id" OPTIONS
 
-            aws apigateway put-integration \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method OPTIONS \
-              --type MOCK \
-              --request-templates '{"application/json":"{\"statusCode\":200}"}' >/dev/null
-
-            aws apigateway put-method-response \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method OPTIONS \
-              --status-code 200 \
-              --response-parameters method.response.header.Access-Control-Allow-Headers=true,method.response.header.Access-Control-Allow-Methods=true,method.response.header.Access-Control-Allow-Origin=true >/dev/null || true
-
-            aws apigateway put-integration-response \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method OPTIONS \
-              --status-code 200 \
-              --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='${ALLOWED_ORIGIN}'" >/dev/null || true
+            aws apigateway put-integration --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method OPTIONS --type MOCK --request-templates '{"application/json":"{\"statusCode\":200}"}' >/dev/null
+            aws apigateway put-method-response --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method OPTIONS --status-code 200 --response-parameters method.response.header.Access-Control-Allow-Headers=true,method.response.header.Access-Control-Allow-Methods=true,method.response.header.Access-Control-Allow-Origin=true >/dev/null || true
+            aws apigateway put-integration-response --rest-api-id "$REST_API_ID" --resource-id "$resource_id" --http-method OPTIONS --status-code 200 --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='${ALLOWED_ORIGIN}'" >/dev/null || true
           }
 
           ROOT_RESOURCE_ID="$(normalize_id "$(get_root_resource_id)")"
@@ -396,9 +341,6 @@ jobs:
           ensure_cors_options "$ANALYZE_RESOURCE_ID"
           ensure_cors_options "$STATUS_RESOURCE_ID"
 
-          aws apigateway create-deployment \
-            --rest-api-id "$REST_API_ID" \
-            --stage-name "$API_STAGE_NAME" \
-            --description "branch=${DEPLOY_BRANCH} sha=${GITHUB_SHA}" >/dev/null
+          aws apigateway create-deployment --rest-api-id "$REST_API_ID" --stage-name "$API_STAGE_NAME" --description "branch=${DEPLOY_BRANCH} sha=${GITHUB_SHA}" >/dev/null
 
           echo "Deployed shared API ${REST_API_ID} stage ${API_STAGE_NAME} from stack ${SAM_STACK_NAME}"
