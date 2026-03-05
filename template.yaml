@@ -36,9 +36,11 @@ Globals:
         CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
 
 Resources:
-  ResumeS3Bucket:
+  ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
     Properties:
+      VersioningConfiguration:
+        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -48,6 +50,53 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+
+  ResumeS3AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResumeS3AccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransportForAccessLogsBucket
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub arn:aws:s3:::${ResumeS3AccessLogsBucket}
+              - !Sub arn:aws:s3:::${ResumeS3AccessLogsBucket}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: AllowServerAccessLogsDelivery
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub arn:aws:s3:::${ResumeS3AccessLogsBucket}/access-logs/*
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:s3:::${ResumeS3Bucket}
+
+  ResumeS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LoggingConfiguration:
+        DestinationBucketName: !Ref ResumeS3AccessLogsBucket
+        LogFilePrefix: access-logs/
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins:
@@ -60,6 +109,24 @@ Resources:
             ExposedHeaders:
               - ETag
             MaxAge: 300
+
+  ResumeS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResumeS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub arn:aws:s3:::${ResumeS3Bucket}
+              - !Sub arn:aws:s3:::${ResumeS3Bucket}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
 
   ResultsTable:
     Type: AWS::DynamoDB::Table
