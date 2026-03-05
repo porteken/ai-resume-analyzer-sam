@@ -160,6 +160,41 @@ jobs:
               ;;
           esac
 
+      - name: Validate Deploy Role Permissions
+        run: |
+          set -euo pipefail
+
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text)"
+          ROLE_NAME="$(echo "$CALLER_ARN" | sed -n 's#.*:assumed-role/\([^/]*\)/.*#\1#p')"
+
+          if [[ -z "$ROLE_NAME" ]]; then
+            echo "Caller is not an assumed IAM role. Skipping IAM simulation preflight."
+            exit 0
+          fi
+
+          ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+
+          if ! MISSING_ACTIONS="$(
+            aws iam simulate-principal-policy \
+              --policy-source-arn "$ROLE_ARN" \
+              --action-names s3:GetBucketPolicy s3:PutBucketPolicy s3:DeleteBucketPolicy \
+              --resource-arns arn:aws:s3:::ai-resume-analyzer* \
+              --query "EvaluationResults[?EvalDecision!='allowed'].EvalActionName" \
+              --output text
+          )"; then
+            echo "Unable to simulate IAM permissions for role '$ROLE_NAME'. Continuing deploy."
+            exit 0
+          fi
+
+          if [[ -n "${MISSING_ACTIONS// }" && "$MISSING_ACTIONS" != "None" ]]; then
+            echo "::error::Missing required S3 bucket-policy permissions for role '$ROLE_NAME': $MISSING_ACTIONS"
+            echo "::error::Grant s3:GetBucketPolicy,s3:PutBucketPolicy,s3:DeleteBucketPolicy on arn:aws:s3:::ai-resume-analyzer*"
+            exit 1
+          fi
+
+          echo "Deploy role preflight passed."
+
       - name: Recover Broken Stack State
         run: |
           set -euo pipefail
@@ -234,7 +269,10 @@ jobs:
       - name: Deploy SAM Application
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SAM_CLI_TELEMETRY: "0"
         run: |
+          set -euo pipefail
+
           # 1. Prepare overrides
           PARAM_OVERRIDES=(
             "ApiStageName=$API_STAGE_NAME"
@@ -248,16 +286,31 @@ jobs:
           fi
 
           # 2. Deploy infrastructure
-          sam deploy \
-            --template-file .aws-sam/build/template.yaml \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --capabilities CAPABILITY_IAM \
-            --resolve-s3 \
-            --s3-prefix "$SAM_STACK_NAME" \
-            --parameter-overrides "${PARAM_OVERRIDES[@]}" \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset
+          set +e
+          DEPLOY_OUTPUT="$(
+            sam deploy \
+              --template-file .aws-sam/build/template.yaml \
+              --stack-name "$SAM_STACK_NAME" \
+              --region "$AWS_REGION" \
+              --capabilities CAPABILITY_IAM \
+              --resolve-s3 \
+              --s3-prefix "$SAM_STACK_NAME" \
+              --parameter-overrides "${PARAM_OVERRIDES[@]}" \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset 2>&1
+          )"
+          DEPLOY_STATUS=$?
+          set -e
+
+          echo "$DEPLOY_OUTPUT"
+
+          if [[ $DEPLOY_STATUS -ne 0 ]]; then
+            if echo "$DEPLOY_OUTPUT" | grep -qE "s3:PutBucketPolicy|s3:DeleteBucketPolicy|s3:GetBucketPolicy"; then
+              echo "::error::SAM deploy failed due to missing S3 bucket policy permissions in CI role."
+              echo "::error::Add s3:GetBucketPolicy,s3:PutBucketPolicy,s3:DeleteBucketPolicy to the assumed deploy role policy."
+            fi
+            exit "$DEPLOY_STATUS"
+          fi
 
       - name: Sync Shared API Routes and Deploy Stage
         run: |
