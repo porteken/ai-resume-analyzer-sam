@@ -51,12 +51,18 @@ jobs:
       - name: Build SAM application
         run: sam build --use-container --template template.yaml
 
+      # 1. NEW: Fix permissions so GitHub Actions can read the root-owned Docker files
+      - name: Fix permissions for SAM build output
+        run: sudo chown -R $USER:$USER .aws-sam/
+
       - name: Upload SAM Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: sam-build-artifact
           path: .aws-sam/
           retention-days: 1
+          # 2. NEW: Force the build to fail immediately if the folder is missing or unreadable
+          if-no-files-found: error
 
   pytest-coverage:
     name: Pytest Coverage
