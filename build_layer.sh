@@ -7,7 +7,7 @@ echo "Building Lambda layer with Docker..."
 echo "Using build image: ${SAM_BUILD_IMAGE}"
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "ERROR: docker is required to build the Lambda layer"
+  echo "ERROR: docker is required to build the Lambda layer" >&2
   exit 1
 fi
 
