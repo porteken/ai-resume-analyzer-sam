@@ -26,6 +26,17 @@ Parameters:
     Default: "*"
     Description: Frontend origin allowed by API and S3 CORS.
 
+  EnableS3AccessLogging:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable S3 server access logging for the resume uploads bucket.
+
+Conditions:
+  UseS3AccessLogging: !Equals [!Ref EnableS3AccessLogging, "true"]
+
 Globals:
   Function:
     Runtime: python3.11
@@ -38,6 +49,7 @@ Globals:
 Resources:
   ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
+    Condition: UseS3AccessLogging
     Properties:
       VersioningConfiguration:
         Status: Enabled
@@ -53,6 +65,7 @@ Resources:
 
   ResumeS3AccessLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Condition: UseS3AccessLogging
     Properties:
       Bucket: !Ref ResumeS3AccessLogsBucket
       PolicyDocument:
@@ -94,9 +107,11 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-      LoggingConfiguration:
-        DestinationBucketName: !Ref ResumeS3AccessLogsBucket
-        LogFilePrefix: access-logs/
+      LoggingConfiguration: !If
+        - UseS3AccessLogging
+        - DestinationBucketName: !Ref ResumeS3AccessLogsBucket
+          LogFilePrefix: access-logs/
+        - !Ref AWS::NoValue
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins:
