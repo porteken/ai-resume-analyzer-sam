@@ -56,6 +56,9 @@ Resources:
       ContentUri: layers/dependencies/
       CompatibleRuntimes:
         - python3.12
+    Metadata:
+      BuildMethod: python3.12
+      BuildArchitecture: x86_64
 
   ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
