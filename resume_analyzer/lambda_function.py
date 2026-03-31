@@ -6,23 +6,22 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-import boto3
 from botocore.exceptions import ClientError
 from google.genai import Client, types
 
+from resume_analyzer.utils import (
+    ACCOUNT_ID,
+    RESUME_BUCKET,
+    api_response,
+    get_results_table,
+    normalize_analysis_result,
+    s3_client,
+)
+
 logger = logging.getLogger(__name__)
 
-s3_client = boto3.client("s3")
-dynamodb: Any = boto3.resource("dynamodb")
-
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
-RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
-ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
-
-results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 
 RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -86,41 +85,6 @@ RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
     ],
     "additionalProperties": False,
 }
-
-
-def _coerce_string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-
-    result: list[str] = []
-    for item in value:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                result.append(text)
-    return result
-
-
-def _normalize_analysis_result(analysis: Any) -> dict[str, Any]:
-    if not isinstance(analysis, dict):
-        raise TypeError("Gemini returned invalid JSON object")
-
-    normalized = dict(analysis)
-    for field in ("strengths", "gaps", "recommendations"):
-        normalized[field] = _coerce_string_list(normalized.get(field))
-
-    return normalized
-
-
-def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
-        },
-        "body": json.dumps(payload),
-    }
 
 
 def _parse_s3_url(s3_url: str) -> tuple[str, str]:
@@ -199,7 +163,7 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
         raise RuntimeError("Gemini returned an empty response")
 
     try:
-        return _normalize_analysis_result(json.loads(text))
+        return normalize_analysis_result(json.loads(text), strict=True)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Gemini returned non-JSON output: {text[:200]}") from exc
 
@@ -210,7 +174,12 @@ def _update_job_status(
     analysis_result: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
-    if not job_id or not results_table:
+    if not job_id:
+        return
+
+    try:
+        table = get_results_table()
+    except RuntimeError:
         return
 
     expression = "SET #status = :status"
@@ -228,7 +197,7 @@ def _update_job_status(
         values[":error"] = error
 
     try:
-        results_table.update_item(
+        table.update_item(
             Key={"job_id": job_id},
             UpdateExpression=expression,
             ExpressionAttributeNames=names,
@@ -239,10 +208,9 @@ def _update_job_status(
 
 
 def _get_job_record(job_id: str) -> dict[str, Any]:
-    if not results_table:
-        return {}
     try:
-        item = results_table.get_item(Key={"job_id": job_id}).get("Item")
+        table = get_results_table()
+        item = table.get_item(Key={"job_id": job_id}).get("Item")
         return item if isinstance(item, dict) else {}
     except Exception:
         logger.exception("Failed to read DynamoDB record for job_id=%s", job_id)
@@ -269,26 +237,27 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
         return None, "Invalid JSON format"
 
 
+class S3LocationError(Exception):
+    """Raised when S3 location cannot be resolved from the request."""
+
+
 def _get_s3_location(
     request: dict[str, Any], job_record: dict[str, Any]
-) -> tuple[str, str] | dict[str, Any]:
-    """Extract S3 bucket and key from request or job record.
-
-    Returns either (bucket, key) tuple or error response dict.
-    """
+) -> tuple[str, str]:
+    """Extract S3 bucket and key from request or job record."""
     s3_url = request.get("s3_url")
     if s3_url:
-        bucket, key = _parse_s3_url(str(s3_url))
-        return bucket, key
+        try:
+            return _parse_s3_url(str(s3_url))
+        except ValueError as exc:
+            raise S3LocationError(str(exc)) from exc
 
     bucket = str(
         request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or ""
     )
     key = str(request.get("s3_key") or job_record.get("s3_key") or "")
     if not bucket or not key:
-        return _response(
-            400, {"error": "Provide 's3_url' or both 's3_bucket' and 's3_key'"}
-        )
+        raise S3LocationError("Provide 's3_url' or both 's3_bucket' and 's3_key'")
     return bucket, key
 
 
@@ -317,15 +286,19 @@ def _is_upstream_unavailable_error(exc: Exception) -> bool:
     )
 
 
-def _handle_analysis_error(job_id: str | None, exc: Exception) -> dict[str, Any]:
+def _handle_analysis_error(
+    job_id: str | None,
+    exc: Exception,
+    *,
+    event: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Handle analysis errors and return appropriate response."""
     if isinstance(exc, ClientError):
-        message = (
-            f"S3 access error: {exc.response.get('Error', {}).get('Code', 'Unknown')}"
-        )
+        code = exc.response.get("Error", {}).get("Code", "Unknown")
+        message = f"S3 access error: {code}"
         if job_id:
             _update_job_status(job_id, "failed", error=message)
-        return _response(500, {"error": message})
+        return api_response(500, {"error": message}, event=event)
 
     if _is_upstream_unavailable_error(exc):
         message = (
@@ -334,12 +307,14 @@ def _handle_analysis_error(job_id: str | None, exc: Exception) -> dict[str, Any]
         )
         if job_id:
             _update_job_status(job_id, "failed", error=message)
-        return _response(503, {"error": message, "type": "ServiceUnavailable"})
+        return api_response(
+            503, {"error": message, "type": "ServiceUnavailable"}, event=event
+        )
 
     logger.exception("Analysis handler failed")
     if job_id:
         _update_job_status(job_id, "failed", error=str(exc))
-    return _response(500, {"error": str(exc), "type": type(exc).__name__})
+    return api_response(500, {"error": "Internal server error"}, event=event)
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -350,9 +325,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """
     request, error = _extract_request(event)
     if error:
-        return _response(400, {"error": error})
+        return api_response(400, {"error": error}, event=event)
 
-    assert request is not None
+    if request is None:
+        return api_response(400, {"error": "No body in request"}, event=event)
+
     job_id = request.get("job_id")
     job_description = str(request.get("job_description", "General resume analysis"))
     job_record = _get_job_record(str(job_id)) if job_id else {}
@@ -361,10 +338,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         job_description = str(job_record["job_description"])
 
     try:
-        location = _get_s3_location(request, job_record)
-        if isinstance(location, dict):
-            return location
-        bucket, key = location
+        bucket, key = _get_s3_location(request, job_record)
 
         if job_id:
             _update_job_status(job_id, "processing")
@@ -375,7 +349,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         if job_id:
             _update_job_status(job_id, "completed", analysis_result=analysis)
 
-        return _response(
+        return api_response(
             200,
             {
                 "job_id": job_id,
@@ -383,6 +357,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                 "s3_key": key,
                 "analysis_result": analysis,
             },
+            event=event,
         )
-    except (ClientError, Exception) as exc:
-        return _handle_analysis_error(job_id, exc)
+    except S3LocationError as exc:
+        return api_response(400, {"error": str(exc)}, event=event)
+    except Exception as exc:
+        return _handle_analysis_error(job_id, exc, event=event)

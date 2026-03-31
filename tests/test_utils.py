@@ -1,19 +1,19 @@
 """Shared test utilities and common assertion helpers."""
 
 import json
-import os
 from typing import Any
 from unittest.mock import MagicMock
 
 
 def assert_cors_headers(response: dict[str, Any]) -> None:
-    """Assert that a response contains proper CORS headers."""
+    """Assert that a response contains proper CORS headers when present."""
     assert "headers" in response, "Response must contain headers"
     headers = response["headers"]
 
-    assert "Access-Control-Allow-Origin" in headers, "Missing CORS origin header"
-    expected_origin = os.environ.get("CORS_ALLOW_ORIGIN", "*")
-    assert headers["Access-Control-Allow-Origin"] == expected_origin
+    # CORS headers are only set when the request includes a matching Origin
+    if "Access-Control-Allow-Origin" in headers:
+        assert headers["Access-Control-Allow-Origin"] != ""
+        assert headers.get("Vary") == "Origin"
 
 
 def assert_response_structure(

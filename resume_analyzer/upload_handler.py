@@ -7,33 +7,21 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-import boto3
+from resume_analyzer.utils import (
+    RESUME_BUCKET,
+    api_response,
+    get_results_table,
+    s3_client,
+)
 
-s3_client = boto3.client("s3")
-dynamodb: Any = boto3.resource("dynamodb")
-
-RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
-RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+MAX_JOB_DESCRIPTION_LENGTH = 5000
 
-results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
 logger = logging.getLogger(__name__)
 
 
 PDF_CONTENT_TYPE = "application/pdf"
-
-
-def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
-        },
-        "body": json.dumps(payload),
-    }
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -49,17 +37,23 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     logger.info("Upload handler invoked")
 
     if not RESUME_BUCKET:
-        return _response(
-            500, {"error": "RESUME_BUCKET environment variable not configured"}
+        return api_response(
+            500,
+            {"error": "RESUME_BUCKET environment variable not configured"},
+            event=event,
         )
 
-    if not results_table:
-        return _response(
-            500, {"error": "RESULTS_TABLE environment variable not configured"}
+    try:
+        table = get_results_table()
+    except RuntimeError:
+        return api_response(
+            500,
+            {"error": "RESULTS_TABLE environment variable not configured"},
+            event=event,
         )
 
     if "body" not in event:
-        return _response(400, {"error": "No body in request"})
+        return api_response(400, {"error": "No body in request"}, event=event)
 
     try:
         body = event.get("body", "")
@@ -69,12 +63,12 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             body = json.loads(body)
 
         if not isinstance(body, dict):
-            return _response(400, {"error": "Invalid JSON body"})
+            return api_response(400, {"error": "Invalid JSON body"}, event=event)
 
         filename = _sanitize_filename(str(body.get("filename", "resume.pdf")))
         job_description = str(
             body.get("job_description", "General resume analysis")
-        ).strip()
+        ).strip()[:MAX_JOB_DESCRIPTION_LENGTH]
 
         job_id = str(uuid.uuid4())
         s3_key = f"uploads/{job_id}/{filename}"
@@ -100,7 +94,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
 
         now = datetime.now(UTC)
-        results_table.put_item(
+        table.put_item(
             Item={
                 "job_id": job_id,
                 "status": "upload_pending",
@@ -113,7 +107,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             }
         )
 
-        return _response(
+        return api_response(
             200,
             {
                 "job_id": job_id,
@@ -126,9 +120,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
                     "fields": presigned_post["fields"],
                 },
             },
+            event=event,
         )
     except json.JSONDecodeError:
-        return _response(400, {"error": "Invalid JSON format"})
-    except Exception as exc:
+        return api_response(400, {"error": "Invalid JSON format"}, event=event)
+    except Exception:
         logger.exception("Upload handler failed")
-        return _response(500, {"error": str(exc), "type": type(exc).__name__})
+        return api_response(500, {"error": "Internal server error"}, event=event)
