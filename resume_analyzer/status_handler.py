@@ -1,11 +1,18 @@
 import logging
 from typing import Any
 
-from resume_analyzer.utils import (
-    api_response,
-    get_results_table,
-    normalize_analysis_result,
-)
+try:
+    from resume_analyzer.utils import (
+        api_response,
+        get_results_table,
+        normalize_analysis_result,
+    )
+except ImportError:
+    from utils import (
+        api_response,
+        get_results_table,
+        normalize_analysis_result,
+    )
 
 logger = logging.getLogger(__name__)
 

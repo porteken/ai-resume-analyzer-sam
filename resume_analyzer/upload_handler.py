@@ -7,12 +7,20 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from resume_analyzer.utils import (
-    RESUME_BUCKET,
-    api_response,
-    get_results_table,
-    s3_client,
-)
+try:
+    from resume_analyzer.utils import (
+        RESUME_BUCKET,
+        api_response,
+        get_results_table,
+        s3_client,
+    )
+except ImportError:
+    from utils import (
+        RESUME_BUCKET,
+        api_response,
+        get_results_table,
+        s3_client,
+    )
 
 UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))

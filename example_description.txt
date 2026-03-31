@@ -1,0 +1,68 @@
+Why This is an Exciting Role:
+
+The Boeing Defense, Space & Security (BDS) organization, Intelligence Systems portfolio, is seeking a DevOps Developer to join our Mission Operations team in Herndon, VA. Our team focuses on delivering complex solutions in some of the most challenging environments on Earth. We provide support for our Mission Operations Portfolio area which design, build, test, deploy, operate, and maintain a wide variety of mission critical platforms and systems for
+
+commercial and government customers.
+
+This Data Scientist position performs data analytics development and data visualization to meet business requirements and provide data to the engineering teams to decrease risk and ensure engineering excellence.
+
+
+    Developing data analytics capabilities in Python to solve business problems
+    Developing automated processes/scripts to capture and analyze data to track Key Performance Indicators across a large-scale distributed system
+    Assisting with system designs to enable data science capabilities
+    Assisting with maintaining data quality
+    Analyzing system performance, identifying bottlenecks, and suggesting optimizations to improve overall system efficiency and responsiveness
+    Maintaining accurate documentation of system configurations, procedures, and troubleshooting steps
+    Participating in the planning and implementation of new systems, upgrades, and migrations, ensuring compatibility and adherence to best practices 
+    Staying up-to-date with the latest technologies, industry trends, and security practices, and continuously improving skills and knowledge
+
+
+What Makes BI&A Different:
+
+As a fully owned subsidiary of The Boeing Company, BI&A offers an optimal mix of a small company environment with exceptional opportunities supported by a large corporation.
+
+Every day, Boeing Intelligence & Analytics supports global missions by building and delivering intelligence, analytics, and cyber solutions that enable users to advance national security. From hardware and software engineering solutions to analytics that keep this nation safe, we create value that meets users' needs. With vibrant partnerships and innovative approaches, we serve the Intelligence Community through innovation and vision. We have provided our customers with the tools needed to counter evolve global and cyber threats, and to improve wartime decision-making.
+
+
+    Our talented employees bring software development, systems engineering, and advanced analytics expertise.
+    We offer numerous prime contract opportunities with customers headquartered in Maryland, Virginia, and the District of Columbia, as well as subcontract opportunities that align with our areas of focus and additional opportunities nationwide through our parent company.
+    We have current open positions on awarded programs across diverse customer sets and are anticipating upcoming contract awards with a 5-year life cycle and an additional 5 option years.
+    Our diverse portfolio allows our employees to move to other projects and teams as they gain further proficiency in their current skill set and learn new skill sets along the way. 
+    We offer hands-on access to cutting-edge technologies and a culture of technical excellence. 
+
+
+Experience and Qualifications:
+
+To be eligible for this demanding position, the ideal candidate should demonstrate the following experience and qualifications:
+
+Required Education and Years of Experience:
+
+
+    Education/experience typically acquired through advanced technical education (e.g. Bachelor) and typically 14 or more years' related work experience or an equivalent combination of technical education and experience (e.g. PhD+9 years' related work experience, Master+12 years' related work experience, 18 years' related work experience, etc.).
+
+
+Required Qualifications: 
+
+
+    Requires an active TS/SCI with Polygraph Clearance (Has been active in the past 24 months) 
+    U.S. Citizenship
+    3 or more years' experience in Data Science 
+    Experience developing data analytics with Python
+    Experience with common data analysis and data visualization
+
+
+Desired Qualifications: 
+
+
+    Experience with common Python packages used for data science
+    Experience with cloud platforms such as AWS, Azure, and/or GCP
+    Certifications in Data Science and/or Data Visualization
+
+
+Telework/Remote Availability:  Telework/Remote work currently not authorized
+
+Work Location(s): Herndon, VA
+
+Summary Pay Range:
+
+Please note that the information shown below is a general guideline only. Pay is based upon candidate experience and qualifications, as well as market and business considerations.

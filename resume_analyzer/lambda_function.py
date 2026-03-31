@@ -9,14 +9,24 @@ from urllib.parse import unquote, urlparse
 from botocore.exceptions import ClientError
 from google.genai import Client, types
 
-from resume_analyzer.utils import (
-    ACCOUNT_ID,
-    RESUME_BUCKET,
-    api_response,
-    get_results_table,
-    normalize_analysis_result,
-    s3_client,
-)
+try:
+    from resume_analyzer.utils import (
+        ACCOUNT_ID,
+        RESUME_BUCKET,
+        api_response,
+        get_results_table,
+        normalize_analysis_result,
+        s3_client,
+    )
+except ImportError:
+    from utils import (
+        ACCOUNT_ID,
+        RESUME_BUCKET,
+        api_response,
+        get_results_table,
+        normalize_analysis_result,
+        s3_client,
+    )
 
 logger = logging.getLogger(__name__)
 
