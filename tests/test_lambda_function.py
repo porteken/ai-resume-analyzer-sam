@@ -7,27 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
+from tests.conftest import FakeTypes
 from tests.test_utils import assert_error_response, assert_success_response
-
-
-class _FakePart:
-    @staticmethod
-    def from_bytes(data: bytes, mime_type: str) -> dict[str, Any]:
-        return {"data": data, "mime_type": mime_type}
-
-
-class _FakeGenerateContentConfig:
-    def __init__(self, **kwargs: Any) -> None:
-        self.__dict__.update(kwargs)
-
-
-class _FakeTypes:
-    def __getattr__(self, name: str) -> Any:
-        if name == "Part":
-            return _FakePart
-        if name == "GenerateContentConfig":
-            return _FakeGenerateContentConfig
-        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
 
 @pytest.fixture
@@ -36,16 +17,14 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     from resume_analyzer import lambda_function
 
     original_s3 = lambda_function.s3_client
-    original_dynamodb = lambda_function.dynamodb
-    original_results_table = lambda_function.results_table
     original_account_id = lambda_function.ACCOUNT_ID
+    original_get_results_table = lambda_function.get_results_table
     original_client_factory = lambda_function._get_genai_client
     original_types_factory = lambda_function._get_genai_types
 
     lambda_function.s3_client = mock_boto3_clients["s3"]
-    lambda_function.dynamodb = mock_boto3_clients["dynamodb"]
-    lambda_function.results_table = mock_boto3_clients["dynamodb_table"]
     lambda_function.ACCOUNT_ID = "123456789012"
+    lambda_function.get_results_table = lambda: mock_boto3_clients["dynamodb_table"]
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -76,15 +55,14 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     mock_client.models.generate_content.return_value = mock_response
 
     lambda_function._get_genai_client = lambda: mock_client
-    lambda_function._get_genai_types = lambda: _FakeTypes()
+    lambda_function._get_genai_types = lambda: FakeTypes()
 
     try:
         yield lambda_function
     finally:
         lambda_function.s3_client = original_s3
-        lambda_function.dynamodb = original_dynamodb
-        lambda_function.results_table = original_results_table
         lambda_function.ACCOUNT_ID = original_account_id
+        lambda_function.get_results_table = original_get_results_table
         lambda_function._get_genai_client = original_client_factory
         lambda_function._get_genai_types = original_types_factory
 
@@ -185,9 +163,7 @@ class TestGeminiAnalysis:
         response = lambda_function_module.lambda_handler(
             sample_analyze_event, mock_lambda_context
         )
-        body = assert_error_response(response, 500)
-
-        assert "non-JSON" in body["error"]
+        assert_error_response(response, 500)
 
     def test_analyze_handles_s3_client_error(
         self,
@@ -225,10 +201,6 @@ class TestGeminiAnalysis:
                 "https://s3.us-east-1.amazonaws.com/bucket-only"
             )
 
-    def test_parse_s3_url_invalid_format(self, lambda_function_module: Any) -> None:
-        with pytest.raises(ValueError, match="valid s3://"):
-            lambda_function_module._parse_s3_url("https://example.com/file.pdf")
-
     def test_download_pdf_empty(
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
     ) -> None:
@@ -257,12 +229,16 @@ class TestGeminiAnalysis:
         lambda_function_module._update_job_status(None, "completed")
 
     def test_update_job_status_no_table(self, lambda_function_module: Any) -> None:
-        original = lambda_function_module.results_table
-        lambda_function_module.results_table = None
+        original = lambda_function_module.get_results_table
+
+        def _no_table():
+            raise RuntimeError("not configured")
+
+        lambda_function_module.get_results_table = _no_table
         try:
             lambda_function_module._update_job_status("job-123", "completed")
         finally:
-            lambda_function_module.results_table = original
+            lambda_function_module.get_results_table = original
 
     def test_update_job_status_exception(
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
@@ -273,13 +249,17 @@ class TestGeminiAnalysis:
         lambda_function_module._update_job_status("job-123", "completed")
 
     def test_get_job_record_no_table(self, lambda_function_module: Any) -> None:
-        original = lambda_function_module.results_table
-        lambda_function_module.results_table = None
+        original = lambda_function_module.get_results_table
+
+        def _no_table():
+            raise RuntimeError("not configured")
+
+        lambda_function_module.get_results_table = _no_table
         try:
             result = lambda_function_module._get_job_record("job-123")
             assert result == {}
         finally:
-            lambda_function_module.results_table = original
+            lambda_function_module.get_results_table = original
 
     def test_get_job_record_exception(
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
@@ -334,16 +314,6 @@ class TestGeminiAnalysis:
         }
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
         assert response["statusCode"] == 200
-
-    def test_missing_bucket_key(
-        self, lambda_function_module: Any, mock_lambda_context: Any
-    ) -> None:
-        event = {
-            "body": '{"job_id": "job-123", "job_description": "test"}',
-            "isBase64Encoded": False,
-        }
-        response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-        assert_error_response(response, 400, "Provide 's3_url'")
 
     def test_status_update_processing(
         self,

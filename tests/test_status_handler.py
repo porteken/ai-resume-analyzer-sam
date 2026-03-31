@@ -12,16 +12,13 @@ def status_handler_module(mock_boto3_clients) -> Any:
     """Import status_handler with mocked dependencies."""
     from resume_analyzer import status_handler
 
-    original_dynamodb = status_handler.dynamodb
-    original_results_table = status_handler.results_table
-    status_handler.dynamodb = mock_boto3_clients["dynamodb"]
-    status_handler.results_table = mock_boto3_clients["dynamodb_table"]
+    original_get_results_table = status_handler.get_results_table
+    status_handler.get_results_table = lambda: mock_boto3_clients["dynamodb_table"]
 
     try:
         yield status_handler
     finally:
-        status_handler.dynamodb = original_dynamodb
-        status_handler.results_table = original_results_table
+        status_handler.get_results_table = original_get_results_table
 
 
 @pytest.mark.integration
@@ -212,8 +209,7 @@ class TestStatusHandler:
             sample_status_event, mock_lambda_context
         )
 
-        body = assert_error_response(response, 500)
-        assert "type" in body
+        assert_error_response(response, 500)
 
     def test_job_with_unknown_status(
         self,
@@ -263,12 +259,18 @@ class TestStatusHandler:
         self, status_handler_module, mock_lambda_context
     ) -> None:
         """Test RuntimeError when RESULTS_TABLE is not set."""
-        original = status_handler_module.results_table
-        status_handler_module.results_table = None
+        original = status_handler_module.get_results_table
+
+        def _no_table():
+            raise RuntimeError("RESULTS_TABLE environment variable not configured")
+
+        status_handler_module.get_results_table = _no_table
         try:
-            event = {"pathParameters": {"job_id": "test-job-123"}}
+            event = {
+                "pathParameters": {"job_id": "test-job-123"},
+                "headers": {"Origin": "https://test.example.com"},
+            }
             response = status_handler_module.lambda_handler(event, mock_lambda_context)
-            body = assert_error_response(response, 500)
-            assert "RESULTS_TABLE" in body["error"]
+            assert_error_response(response, 500)
         finally:
-            status_handler_module.results_table = original
+            status_handler_module.get_results_table = original

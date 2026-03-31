@@ -9,26 +9,36 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 
-class _FakePart:
+class FakePart:
     @staticmethod
     def from_bytes(data: bytes, mime_type: str) -> dict[str, Any]:
         return {"data": data, "mime_type": mime_type}
 
 
-class _FakeGenerateContentConfig:
+class FakeGenerateContentConfig:
     def __init__(self, **kwargs: Any) -> None:
         self.__dict__.update(kwargs)
 
 
+class FakeTypes:
+    def __getattr__(self, name: str) -> Any:
+        if name == "Part":
+            return FakePart
+        if name == "GenerateContentConfig":
+            return FakeGenerateContentConfig
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+
+
 _fake_genai_module: Any = ModuleType("google.genai")
 _fake_types_module: Any = ModuleType("google.genai.types")
-_fake_types_module.Part = _FakePart
-_fake_types_module.GenerateContentConfig = _FakeGenerateContentConfig
+_fake_types_module.Part = FakePart
+_fake_types_module.GenerateContentConfig = FakeGenerateContentConfig
 _fake_genai_module.types = _fake_types_module
 _fake_genai_module.Client = MagicMock()
 sys.modules["google.genai"] = _fake_genai_module
 
 CONTENT_TYPE_JSON = "application/json"
+TEST_ORIGIN = "https://test.example.com"
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +50,12 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESULTS_TABLE", "test-results-table")
     monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    monkeypatch.setenv("CORS_ALLOW_ORIGIN", "*")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://test.example.com")
+
+    from resume_analyzer import utils
+
+    monkeypatch.setattr(utils, "CORS_ALLOWED_ORIGINS", {TEST_ORIGIN})
+    utils.reset_results_table()
 
 
 @pytest.fixture
@@ -118,7 +133,7 @@ def sample_upload_event() -> dict[str, Any]:
     return {
         "httpMethod": "POST",
         "path": "/upload",
-        "headers": {"Content-Type": CONTENT_TYPE_JSON},
+        "headers": {"Content-Type": CONTENT_TYPE_JSON, "Origin": TEST_ORIGIN},
         "body": json.dumps(body_dict),
         "isBase64Encoded": False,
     }
@@ -135,7 +150,7 @@ def sample_analyze_event() -> dict[str, Any]:
     return {
         "httpMethod": "POST",
         "path": "/analyze",
-        "headers": {"Content-Type": CONTENT_TYPE_JSON},
+        "headers": {"Content-Type": CONTENT_TYPE_JSON, "Origin": TEST_ORIGIN},
         "body": json.dumps(body_dict),
         "isBase64Encoded": False,
     }
@@ -148,7 +163,7 @@ def sample_status_event() -> dict[str, Any]:
         "httpMethod": "GET",
         "path": "/status/test-job-123",
         "pathParameters": {"job_id": "test-job-123"},
-        "headers": {"Content-Type": CONTENT_TYPE_JSON},
+        "headers": {"Content-Type": CONTENT_TYPE_JSON, "Origin": TEST_ORIGIN},
     }
 
 

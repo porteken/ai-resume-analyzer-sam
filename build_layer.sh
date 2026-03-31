@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-SAM_BUILD_IMAGE="${SAM_BUILD_IMAGE:-public.ecr.aws/sam/build-python3.11:1.136.0}"
+SAM_BUILD_IMAGE="${SAM_BUILD_IMAGE:-public.ecr.aws/sam/build-python3.12:1.136.0}"
 
 echo "Building Lambda layer with Docker..."
 echo "Using build image: ${SAM_BUILD_IMAGE}"

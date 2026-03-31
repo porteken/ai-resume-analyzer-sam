@@ -1,64 +1,26 @@
-import json
 import logging
-import os
 from typing import Any
 
-import boto3
-
-dynamodb: Any = boto3.resource("dynamodb")
-RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
-results_table: Any | None = dynamodb.Table(RESULTS_TABLE) if RESULTS_TABLE else None
+try:
+    from resume_analyzer.utils import (
+        api_response,
+        get_results_table,
+        normalize_analysis_result,
+    )
+except ImportError:
+    from utils import (
+        api_response,
+        get_results_table,
+        normalize_analysis_result,
+    )
 
 logger = logging.getLogger(__name__)
 
 
-def _response(status_code: int, payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
-        },
-        "body": json.dumps(payload),
-    }
-
-
-def _validate_results_table() -> None:
-    """Validate that results_table is configured."""
-    if not results_table:
-        raise RuntimeError("RESULTS_TABLE environment variable not configured")
-
-
-def _coerce_string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-
-    result: list[str] = []
-    for item in value:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                result.append(text)
-    return result
-
-
-def _normalize_analysis_result(value: Any) -> Any:
-    if not isinstance(value, dict):
-        return value
-
-    normalized = dict(value)
-    for field in ("strengths", "gaps", "recommendations"):
-        normalized[field] = _coerce_string_list(normalized.get(field))
-
-    return normalized
-
-
 def _get_job_item(job_id: str) -> dict[str, Any] | None:
     """Get job item from DynamoDB."""
-    if not results_table:
-        return None
-    response = results_table.get_item(Key={"job_id": job_id})
+    table = get_results_table()
+    response = table.get_item(Key={"job_id": job_id})
     return response.get("Item")
 
 
@@ -70,15 +32,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         job_id = event.get("pathParameters", {}).get("job_id")
 
         if not job_id:
-            return _response(400, {"error": "Missing job_id in path"})
-
-        _validate_results_table()
+            return api_response(400, {"error": "Missing job_id in path"}, event=event)
 
         item = _get_job_item(job_id)
         if not item:
-            return _response(404, {"error": "Job not found"})
+            return api_response(404, {"error": "Job not found"}, event=event)
 
-        result = {
+        result: dict[str, Any] = {
             "job_id": job_id,
             "status": item.get("status", "unknown"),
             "filename": item.get("filename"),
@@ -86,13 +46,13 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
         if item.get("status") == "completed":
-            result["analysis_result"] = _normalize_analysis_result(
+            result["analysis_result"] = normalize_analysis_result(
                 item.get("analysis_result")
             )
         elif item.get("status") == "failed":
             result["error"] = item.get("error")
 
-        return _response(200, result)
-    except Exception as exc:
+        return api_response(200, result, event=event)
+    except Exception:
         logger.exception("Status handler failed")
-        return _response(500, {"error": str(exc), "type": type(exc).__name__})
+        return api_response(500, {"error": "Internal server error"}, event=event)

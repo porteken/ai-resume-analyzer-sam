@@ -14,19 +14,16 @@ def upload_handler_module(mock_boto3_clients) -> Any:
     from resume_analyzer import upload_handler
 
     original_s3 = upload_handler.s3_client
-    original_dynamodb = upload_handler.dynamodb
-    original_results_table = upload_handler.results_table
+    original_get_results_table = upload_handler.get_results_table
 
     upload_handler.s3_client = mock_boto3_clients["s3"]
-    upload_handler.dynamodb = mock_boto3_clients["dynamodb"]
-    upload_handler.results_table = mock_boto3_clients["dynamodb_table"]
+    upload_handler.get_results_table = lambda: mock_boto3_clients["dynamodb_table"]
 
     try:
         yield upload_handler
     finally:
         upload_handler.s3_client = original_s3
-        upload_handler.dynamodb = original_dynamodb
-        upload_handler.results_table = original_results_table
+        upload_handler.get_results_table = original_get_results_table
 
 
 @pytest.mark.integration
@@ -114,7 +111,7 @@ class TestUploadHandler:
         response = upload_handler_module.lambda_handler(
             sample_upload_event, mock_lambda_context
         )
-        assert_error_response(response, 500, "S3 failure")
+        assert_error_response(response, 500)
 
     def test_sanitize_filename_adds_pdf_extension(self, upload_handler_module) -> None:
         result = upload_handler_module._sanitize_filename("resume")
@@ -139,14 +136,22 @@ class TestUploadHandler:
     def test_results_table_not_configured(
         self, upload_handler_module, mock_lambda_context
     ) -> None:
-        original = upload_handler_module.results_table
-        upload_handler_module.results_table = None
+        original = upload_handler_module.get_results_table
+
+        def _no_table():
+            raise RuntimeError("RESULTS_TABLE not configured")
+
+        upload_handler_module.get_results_table = _no_table
         try:
-            event = {"body": '{"filename": "test.pdf"}', "isBase64Encoded": False}
+            event = {
+                "body": '{"filename": "test.pdf"}',
+                "isBase64Encoded": False,
+                "headers": {"Origin": "https://test.example.com"},
+            }
             response = upload_handler_module.lambda_handler(event, mock_lambda_context)
             assert_error_response(response, 500, "RESULTS_TABLE")
         finally:
-            upload_handler_module.results_table = original
+            upload_handler_module.get_results_table = original
 
     def test_base64_encoded_body(
         self, upload_handler_module, mock_lambda_context, mock_boto3_clients

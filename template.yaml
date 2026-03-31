@@ -21,10 +21,10 @@ Parameters:
     Default: tbitqsc1li
     Description: Existing shared API Gateway REST API ID (ai-resume-analyzer).
 
-  AllowedOrigin:
+  AllowedOrigins:
     Type: String
-    Default: "*"
-    Description: Frontend origin allowed by API and S3 CORS.
+    Default: "https://ai-resume-analyzer-app-lake.vercel.app,https://ai-resume-analyzer-app-git-dev-portekens-projects.vercel.app"
+    Description: Comma-separated frontend origins allowed by API and S3 CORS.
 
   EnableS3AccessLogging:
     Type: String
@@ -39,14 +39,27 @@ Conditions:
 
 Globals:
   Function:
-    Runtime: python3.11
+    Runtime: python3.12
     Timeout: 10
     MemorySize: 128
+    Layers:
+      - !Ref DependenciesLayer
     Environment:
       Variables:
-        CORS_ALLOW_ORIGIN: !Ref AllowedOrigin
+        CORS_ALLOWED_ORIGINS: !Ref AllowedOrigins
 
 Resources:
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-dependencies'
+      ContentUri: layers/dependencies/
+      CompatibleRuntimes:
+        - python3.12
+    Metadata:
+      BuildMethod: python3.12
+      BuildArchitecture: x86_64
+
   ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
     Condition: UseS3AccessLogging
@@ -114,8 +127,7 @@ Resources:
         - !Ref AWS::NoValue
       CorsConfiguration:
         CorsRules:
-          - AllowedOrigins:
-              - !Ref AllowedOrigin
+          - AllowedOrigins: !Split [",", !Ref AllowedOrigins]
             AllowedMethods:
               - POST
               - GET
@@ -189,7 +201,7 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-AnalyzeFunction'
       CodeUri: resume_analyzer/
       Handler: lambda_function.lambda_handler
-      Timeout: 30
+      Timeout: 60
       MemorySize: 384
 
       Policies:

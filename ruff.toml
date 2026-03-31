@@ -11,7 +11,7 @@ exclude = [
 
 line-length = 100
 
-target-version = "py311"
+target-version = "py312"
 
 [lint]
 select = ["ALL"]
@@ -46,4 +46,4 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/*" = ["ANN001", "SLF001", "ARG002", "PLC0415", "D102"]
+"tests/*" = ["ANN001", "ANN202", "SLF001", "ARG002", "PLC0415", "D101", "D102", "D105", "D107"]
