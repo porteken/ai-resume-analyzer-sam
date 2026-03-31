@@ -225,11 +225,30 @@ jobs:
           echo "Current stack status: $STACK_STATUS"
 
           case "$STACK_STATUS" in
-            ROLLBACK_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_FAILED)
+            UPDATE_ROLLBACK_COMPLETE)
+              echo "Stack rolled back to previous state. Safe to re-deploy."
+              ;;
+            ROLLBACK_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED|CREATE_FAILED|DELETE_FAILED)
               echo "Detected broken CF stack ($STACK_STATUS). Cleaning up..."
 
               if [[ "$STACK_STATUS" == "DELETE_FAILED" ]]; then
-                if ! aws cloudformation delete-stack \
+                # Identify resources blocking deletion
+                FAILED_RESOURCES="$(
+                  aws cloudformation describe-stack-events \
+                    --stack-name "$SAM_STACK_NAME" \
+                    --region "$AWS_REGION" \
+                    --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" \
+                    --output text 2>/dev/null || true
+                )"
+
+                if [[ -n "$FAILED_RESOURCES" ]]; then
+                  echo "Retaining resources that failed to delete: $FAILED_RESOURCES"
+                  # shellcheck disable=SC2086
+                  aws cloudformation delete-stack \
+                    --stack-name "$SAM_STACK_NAME" \
+                    --region "$AWS_REGION" \
+                    --retain-resources $FAILED_RESOURCES
+                elif ! aws cloudformation delete-stack \
                   --stack-name "$SAM_STACK_NAME" \
                   --region "$AWS_REGION" \
                   --deletion-mode FORCE_DELETE_STACK; then
