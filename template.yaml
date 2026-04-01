@@ -63,6 +63,8 @@ Resources:
   ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
     Condition: UseS3AccessLogging
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       VersioningConfiguration:
         Status: Enabled
@@ -108,6 +110,8 @@ Resources:
 
   ResumeS3Bucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       VersioningConfiguration:
         Status: Enabled
@@ -157,6 +161,8 @@ Resources:
 
   ResultsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
@@ -268,18 +274,24 @@ Resources:
 
   PresignedUploadFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/${PresignedUploadFunction}
       RetentionInDays: 5
 
   AnalyzeFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/${AnalyzeFunction}
       RetentionInDays: 5
 
   StatusFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/${StatusFunction}
       RetentionInDays: 5
