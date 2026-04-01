@@ -14,7 +14,7 @@ RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 
-# CORS: comma-separated allowed origins
+
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 CORS_ALLOWED_ORIGINS: set[str] = {
     o.strip().rstrip("/") for o in _cors_raw.split(",") if o.strip()

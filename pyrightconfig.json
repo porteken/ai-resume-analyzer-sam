@@ -1,25 +1,25 @@
 {
-  "include": [
-    "resume_analyzer"
-  ],
-  "exclude": [
-    "**/__pycache__",
-    ".venv",
-    "venv",
-    ".aws-sam",
-    "layers", "**/node_modules", "**/.*"
-  ],
-  "pythonVersion": "3.12",
-  "pythonPlatform": "Linux",
-  "typeCheckingMode": "basic",
-  "reportMissingImports": false,
-  "reportMissingTypeStubs": false,
-  "reportUnknownVariableType": false,
-  "reportUnknownMemberType": false,
-  "reportUnknownArgumentType": false,
-  "reportUnknownParameterType": false,
-  "reportUnknownLambdaType": false,
-  "reportGeneralTypeIssues": false,
-  "venvPath": ".",
-  "venv": "venv"
+    "include": ["resume_analyzer"],
+    "exclude": [
+        "**/__pycache__",
+        ".venv",
+        "venv",
+        ".aws-sam",
+        "layers",
+        "**/node_modules",
+        "**/.*",
+    ],
+    "pythonVersion": "3.12",
+    "pythonPlatform": "Linux",
+    "typeCheckingMode": "basic",
+    "reportMissingImports": false,
+    "reportMissingTypeStubs": false,
+    "reportUnknownVariableType": false,
+    "reportUnknownMemberType": false,
+    "reportUnknownArgumentType": false,
+    "reportUnknownParameterType": false,
+    "reportUnknownLambdaType": false,
+    "reportGeneralTypeIssues": false,
+    "venvPath": ".",
+    "venv": "venv",
 }
