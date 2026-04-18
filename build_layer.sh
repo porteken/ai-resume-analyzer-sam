@@ -3,6 +3,9 @@ set -euo pipefail
 
 SAM_BUILD_IMAGE="${SAM_BUILD_IMAGE:-public.ecr.aws/sam/build-python3.12:1.136.0}"
 
+echo "Exporting requirements.txt from uv..."
+uv export --no-dev --format requirements-txt --output-file requirements.txt
+
 echo "Building Lambda layer with Docker..."
 echo "Using build image: ${SAM_BUILD_IMAGE}"
 
