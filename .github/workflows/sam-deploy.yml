@@ -19,9 +19,8 @@ env:
   PYTHON_VERSION: '3.12'
 
 jobs:
-  # ==========================================
-  # EXECUTION BRANCH A: BUILD SAM
-  # ==========================================
+  
+  
   build:
     name: Build SAM Application
     runs-on: ubuntu-latest
@@ -32,10 +31,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@d78e1a4a9656d3b223e59b80676a797f20093133
@@ -64,9 +64,9 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
-  # ==========================================
-  # EXECUTION BRANCH B: TEST & SCAN
-  # ==========================================
+  
+  
+  
   test-and-scan:
     name: Pytest & SonarQube Scan
     runs-on: ubuntu-latest
@@ -77,21 +77,19 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for accurate SonarQube analysis
+          fetch-depth: 0  
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
+          enable-cache: true
 
-      - name: Install Test Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
 
       - name: Run Pytest with Coverage
-        run: pytest
+        run: uv run pytest
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
@@ -100,12 +98,12 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  # ==========================================
-  # CONVERGENCE: DEPLOY TO AWS
-  # ==========================================
+  
+  
+  
   deploy:
     name: Deploy to AWS
-    needs: [build, test-and-scan] # <--- Waits for both Branches A and B to finish
+    needs: [build, test-and-scan] 
     runs-on: ubuntu-latest
     if: github.event_name == 'push'   
     permissions:
@@ -232,7 +230,7 @@ jobs:
               echo "Detected broken CF stack ($STACK_STATUS). Cleaning up..."
 
               if [[ "$STACK_STATUS" == "DELETE_FAILED" ]]; then
-                # Identify resources blocking deletion
+                
                 FAILED_RESOURCES="$(
                   aws cloudformation describe-stack-events \
                     --stack-name "$SAM_STACK_NAME" \
@@ -243,7 +241,7 @@ jobs:
 
                 if [[ -n "$FAILED_RESOURCES" ]]; then
                   echo "Retaining resources that failed to delete: $FAILED_RESOURCES"
-                  # shellcheck disable=SC2086
+                  
                   aws cloudformation delete-stack \
                     --stack-name "$SAM_STACK_NAME" \
                     --region "$AWS_REGION" \
@@ -292,7 +290,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 1. Prepare overrides
+          
           PARAM_OVERRIDES=(
             "ApiStageName=$API_STAGE_NAME"
             "ExistingApiId=$SHARED_REST_API_ID"
@@ -304,7 +302,7 @@ jobs:
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
           fi
 
-          # 2. Deploy infrastructure
+          
           set +e
           DEPLOY_OUTPUT="$(
             sam deploy \
@@ -335,9 +333,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ---------------------------------------------------------
-          # CONFIGURATION
-          # ---------------------------------------------------------
+          
+          
+          
           REST_API_ID="$SHARED_REST_API_ID"
           REGION="$AWS_REGION"
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
@@ -346,14 +344,14 @@ jobs:
           ANALYZE_FN="${SAM_STACK_NAME}-AnalyzeFunction"
           STATUS_FN="${SAM_STACK_NAME}-StatusFunction"
 
-          # Verify functions exist
+          
           aws lambda get-function --function-name "$UPLOAD_FN" >/dev/null
           aws lambda get-function --function-name "$ANALYZE_FN" >/dev/null
           aws lambda get-function --function-name "$STATUS_FN" >/dev/null
 
-          # ---------------------------------------------------------
-          # HELPER FUNCTIONS
-          # ---------------------------------------------------------
+          
+          
+          
           normalize_id() {
             local value="${1:-}"
             if [[ -z "$value" || "$value" == "None" || "$value" == "null" ]]; then echo ""; else echo "$value"; fi
@@ -399,7 +397,7 @@ jobs:
             local http_method="$2"
             local req_params="${3:-}"
 
-            # Skip if method exists
+            
             if aws apigateway get-method \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
@@ -446,7 +444,7 @@ jobs:
             local resource_id="$1"
             ensure_method_exists "$resource_id" OPTIONS
 
-            # 1. Put mock integration
+            
             aws apigateway put-integration \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
@@ -454,7 +452,7 @@ jobs:
               --type MOCK \
               --request-templates '{"application/json":"{\"statusCode\":200}"}' >/dev/null
               
-            # 2. Put method response headers
+            
             aws apigateway put-method-response \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
@@ -462,7 +460,7 @@ jobs:
               --status-code 200 \
               --response-parameters "method.response.header.Access-Control-Allow-Headers=true,method.response.header.Access-Control-Allow-Methods=true,method.response.header.Access-Control-Allow-Origin=true" >/dev/null || true
               
-            # 3. Put integration response headers
+            
             aws apigateway put-integration-response \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
@@ -471,34 +469,34 @@ jobs:
               --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='${ALLOWED_ORIGINS%%,*}'" >/dev/null || true
           }
 
-          # ---------------------------------------------------------
-          # MAIN EXECUTION
-          # ---------------------------------------------------------
+          
+          
+          
           ROOT_RESOURCE_ID="$(normalize_id "$(get_root_resource_id)")"
           if [[ -z "$ROOT_RESOURCE_ID" ]]; then
             echo "Unable to resolve root resource ID for shared API: $REST_API_ID"
             exit 1
           fi
 
-          # 1. Create resources hierarchy
+          
           UPLOAD_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" upload)"
           ANALYZE_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" analyze)"
           STATUS_PARENT_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" status)"
           STATUS_RESOURCE_ID="$(ensure_child_resource "$STATUS_PARENT_RESOURCE_ID" '{job_id}')"
 
-          # 2. Attach lambda integrations
+          
           upsert_lambda_proxy_integration "$UPLOAD_RESOURCE_ID" POST "$UPLOAD_FN"
           upsert_lambda_proxy_integration "$ANALYZE_RESOURCE_ID" POST "$ANALYZE_FN"
           
           ensure_method_exists "$STATUS_RESOURCE_ID" GET "method.request.path.job_id=true"
           upsert_lambda_proxy_integration "$STATUS_RESOURCE_ID" GET "$STATUS_FN"
 
-          # 3. Setup CORS configurations
+          
           ensure_cors_options "$UPLOAD_RESOURCE_ID"
           ensure_cors_options "$ANALYZE_RESOURCE_ID"
           ensure_cors_options "$STATUS_RESOURCE_ID"
 
-          # 4. Deploy API Stage
+          
           aws apigateway create-deployment \
             --rest-api-id "$REST_API_ID" \
             --stage-name "$API_STAGE_NAME" \

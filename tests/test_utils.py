@@ -10,7 +10,6 @@ def assert_cors_headers(response: dict[str, Any]) -> None:
     assert "headers" in response, "Response must contain headers"
     headers = response["headers"]
 
-    # CORS headers are only set when the request includes a matching Origin
     if "Access-Control-Allow-Origin" in headers:
         assert headers["Access-Control-Allow-Origin"] != ""
         assert headers.get("Vary") == "Origin"
