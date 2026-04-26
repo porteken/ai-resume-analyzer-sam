@@ -80,6 +80,7 @@ jobs:
           fetch-depth: 0  
 
       - name: Setup uv
+        if: github.ref_name != 'prd'
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           python-version: ${{ env.PYTHON_VERSION }}
