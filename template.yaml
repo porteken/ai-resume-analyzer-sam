@@ -34,8 +34,14 @@ Parameters:
       - "false"
     Description: Enable S3 server access logging for the resume uploads bucket.
 
+  AccessLogsAuditBucketName:
+    Type: String
+    Default: ""
+    Description: Optional separate S3 bucket name to receive access logs for the access-logs bucket itself. Leave empty unless you have a dedicated central audit bucket, because the log destination bucket should not self-log.
+
 Conditions:
   UseS3AccessLogging: !Equals [!Ref EnableS3AccessLogging, "true"]
+  UseAccessLogsAuditBucket: !Not [!Equals [!Ref AccessLogsAuditBucketName, ""]]
 
 Globals:
   Function:
@@ -77,6 +83,11 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      LoggingConfiguration: !If
+        - UseAccessLogsAuditBucket
+        - DestinationBucketName: !Ref AccessLogsAuditBucketName
+          LogFilePrefix: access-logs-bucket/
+        - !Ref AWS::NoValue
 
   ResumeS3AccessLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -91,22 +102,33 @@ Resources:
             Principal: "*"
             Action: "s3:*"
             Resource:
-              - !Sub arn:aws:s3:::${ResumeS3AccessLogsBucket}
-              - !Sub arn:aws:s3:::${ResumeS3AccessLogsBucket}/*
+              - !GetAtt ResumeS3AccessLogsBucket.Arn
+              - !Sub '${ResumeS3AccessLogsBucket.Arn}/*'
             Condition:
               Bool:
-                aws:SecureTransport: 'false'
+                "aws:SecureTransport": false
+          - Sid: DenyInsecureTransportForAccessLogsBucketAwsPrincipals
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Action: "*"
+            Resource:
+              - !GetAtt ResumeS3AccessLogsBucket.Arn
+              - !Sub '${ResumeS3AccessLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
           - Sid: AllowServerAccessLogsDelivery
             Effect: Allow
             Principal:
               Service: logging.s3.amazonaws.com
             Action: s3:PutObject
-            Resource: !Sub arn:aws:s3:::${ResumeS3AccessLogsBucket}/access-logs/*
+            Resource: !Sub '${ResumeS3AccessLogsBucket.Arn}/access-logs/*'
             Condition:
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnLike:
-                aws:SourceArn: !Sub arn:aws:s3:::${ResumeS3Bucket}
+                aws:SourceArn: !GetAtt ResumeS3Bucket.Arn
 
   ResumeS3Bucket:
     Type: AWS::S3::Bucket
@@ -153,11 +175,22 @@ Resources:
             Principal: "*"
             Action: "s3:*"
             Resource:
-              - !Sub arn:aws:s3:::${ResumeS3Bucket}
-              - !Sub arn:aws:s3:::${ResumeS3Bucket}/*
+              - !GetAtt ResumeS3Bucket.Arn
+              - !Sub '${ResumeS3Bucket.Arn}/*'
             Condition:
               Bool:
-                aws:SecureTransport: 'false'
+                "aws:SecureTransport": false
+          - Sid: DenyInsecureTransportAwsPrincipals
+            Effect: Deny
+            Principal:
+              AWS: "*"
+            Action: "*"
+            Resource:
+              - !GetAtt ResumeS3Bucket.Arn
+              - !Sub '${ResumeS3Bucket.Arn}/*'
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
 
   ResultsTable:
     Type: AWS::DynamoDB::Table
