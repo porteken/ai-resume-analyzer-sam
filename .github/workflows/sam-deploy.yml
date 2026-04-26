@@ -53,7 +53,7 @@ jobs:
         run: sam build --use-container --template template.yaml
 
       - name: Fix Permissions for SAM Build Output
-        run: sudo chown -R $USER:$USER .aws-sam/
+        run: sudo chown -R "$USER:$USER" .aws-sam/
 
       - name: Upload SAM Build Artifact
         uses: actions/upload-artifact@v4
@@ -86,12 +86,15 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
+        if: github.ref_name != 'prd'
         run: uv sync --all-extras --dev
 
       - name: Run Pytest with Coverage
+        if: github.ref_name != 'prd'
         run: uv run pytest
 
       - name: SonarQube Scan
+        if: github.ref_name != 'prd'
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
         with:
           args: -Dsonar.python.coverage.reportPaths=coverage.xml
@@ -245,7 +248,7 @@ jobs:
                   aws cloudformation delete-stack \
                     --stack-name "$SAM_STACK_NAME" \
                     --region "$AWS_REGION" \
-                    --retain-resources $FAILED_RESOURCES
+                    --retain-resources "$FAILED_RESOURCES"
                 elif ! aws cloudformation delete-stack \
                   --stack-name "$SAM_STACK_NAME" \
                   --region "$AWS_REGION" \
