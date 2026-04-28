@@ -22,3 +22,44 @@ dev = [
     "python-lambda-local>=0.1.0",
     "ruff>=0.1.0",
 ]
+
+[tool.ruff]
+exclude = [
+    ".git",
+    ".venv",
+    "**/.venv",
+    "venv",
+    "**/venv",
+    "__pycache__",
+    "**/site-packages",
+    ".aws-sam",
+    "layers",
+    "build",
+    "dist",
+]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203",
+    "D213",
+    "E501",
+    "D100",
+    "D104",
+    "D200",
+    "D205",
+    "D401",
+    "COM812",
+    "ISC001",
+    "TRY300",
+    "EM101",
+    "EM102",
+    "TRY003",
+    "ANN401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"resume_analyzer/upload_handler.py" = ["PLR0911"]
+"tests/*" = ["S101", "PLR2004", "FBT001", "FBT002", "ANN001", "ANN202", "SLF001", "ARG002", "PLC0415", "D101", "D102", "D105", "D107"]

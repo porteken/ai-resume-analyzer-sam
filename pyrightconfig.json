@@ -1,9 +1,12 @@
 {
-    "include": ["resume_analyzer"],
+    "include": ["resume_analyzer", "tests"],
     "exclude": [
         "**/__pycache__",
         ".venv",
+        "**/.venv",
         "venv",
+        "**/venv",
+        "**/site-packages",
         ".aws-sam",
         "layers",
         "**/node_modules",
