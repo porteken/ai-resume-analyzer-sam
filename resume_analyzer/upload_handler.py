@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 try:
@@ -33,7 +34,7 @@ PDF_CONTENT_TYPE = "application/pdf"
 
 
 def _sanitize_filename(filename: str) -> str:
-    base = os.path.basename(filename).strip() or "resume.pdf"
+    base = Path(filename).name.strip() or "resume.pdf"
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", base)
     if not safe.lower().endswith(".pdf"):
         safe += ".pdf"
@@ -53,18 +54,11 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     try:
         table = get_results_table()
-    except RuntimeError:
-        return api_response(
-            500,
-            {"error": "RESULTS_TABLE environment variable not configured"},
-            event=event,
-        )
 
-    if "body" not in event:
-        return api_response(400, {"error": "No body in request"}, event=event)
+        body = event.get("body")
+        if body is None:
+            return api_response(400, {"error": "No body in request"}, event=event)
 
-    try:
-        body = event.get("body", "")
         if event.get("isBase64Encoded", False):
             body = base64.b64decode(body).decode("utf-8")
         if isinstance(body, str):
@@ -74,9 +68,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return api_response(400, {"error": "Invalid JSON body"}, event=event)
 
         filename = _sanitize_filename(str(body.get("filename", "resume.pdf")))
-        job_description = str(
-            body.get("job_description", "General resume analysis")
-        ).strip()[:MAX_JOB_DESCRIPTION_LENGTH]
+        job_description = str(body.get("job_description", "General resume analysis")).strip()[
+            :MAX_JOB_DESCRIPTION_LENGTH
+        ]
 
         job_id = str(uuid.uuid4())
         s3_key = f"uploads/{job_id}/{filename}"
@@ -132,6 +126,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
     except json.JSONDecodeError:
         return api_response(400, {"error": "Invalid JSON format"}, event=event)
+    except (TypeError, ValueError) as exc:
+        return api_response(400, {"error": str(exc)}, event=event)
+    except RuntimeError as exc:
+        return api_response(500, {"error": str(exc)}, event=event)
     except Exception:
         logger.exception("Upload handler failed")
         return api_response(500, {"error": "Internal server error"}, event=event)

@@ -1,4 +1,5 @@
 import base64
+import http
 import json
 import logging
 import os
@@ -109,11 +110,13 @@ def _parse_s3_url(s3_url: str) -> tuple[str, str]:
 
         if host_parts[0] == "s3":
             parts = path.split("/", 1)
-            if len(parts) != 2:
+            expected_parts = 2
+            if len(parts) != expected_parts:
                 raise ValueError("Invalid S3 path-style URL")
             return parts[0], unquote(parts[1])
 
-        if len(host_parts) >= 3 and host_parts[1] == "s3":
+        min_host_parts = 3
+        if len(host_parts) >= min_host_parts and host_parts[1] == "s3":
             return host_parts[0], unquote(path)
 
     raise ValueError("s3_url must be a valid s3:// or https://...amazonaws.com URL")
@@ -251,9 +254,7 @@ class S3LocationError(Exception):
     """Raised when S3 location cannot be resolved from the request."""
 
 
-def _get_s3_location(
-    request: dict[str, Any], job_record: dict[str, Any]
-) -> tuple[str, str]:
+def _get_s3_location(request: dict[str, Any], job_record: dict[str, Any]) -> tuple[str, str]:
     """Extract S3 bucket and key from request or job record."""
     s3_url = request.get("s3_url")
     if s3_url:
@@ -262,9 +263,7 @@ def _get_s3_location(
         except ValueError as exc:
             raise S3LocationError(str(exc)) from exc
 
-    bucket = str(
-        request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or ""
-    )
+    bucket = str(request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or "")
     key = str(request.get("s3_key") or job_record.get("s3_key") or "")
     if not bucket or not key:
         raise S3LocationError("Provide 's3_url' or both 's3_bucket' and 's3_key'")
@@ -278,7 +277,7 @@ def _is_upstream_unavailable_error(exc: Exception) -> bool:
 
     status_code = getattr(exc, "status_code", None)
     code = getattr(exc, "code", None)
-    if status_code == 503 or code == 503:
+    if http.HTTPStatus.SERVICE_UNAVAILABLE in {status_code, code}:
         return True
 
     if "503" not in message:
@@ -291,9 +290,7 @@ def _is_upstream_unavailable_error(exc: Exception) -> bool:
         "'code': 503",
         '"code": 503',
     )
-    return type_name == "ServerError" or any(
-        marker in message for marker in unavailable_markers
-    )
+    return type_name == "ServerError" or any(marker in message for marker in unavailable_markers)
 
 
 def _handle_analysis_error(
@@ -317,9 +314,7 @@ def _handle_analysis_error(
         )
         if job_id:
             _update_job_status(job_id, "failed", error=message)
-        return api_response(
-            503, {"error": message, "type": "ServiceUnavailable"}, event=event
-        )
+        return api_response(503, {"error": message, "type": "ServiceUnavailable"}, event=event)
 
     logger.exception("Analysis handler failed")
     if job_id:
@@ -372,4 +367,5 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     except S3LocationError as exc:
         return api_response(400, {"error": str(exc)}, event=event)
     except Exception as exc:
+        logger.exception("Analysis handler failed")
         return _handle_analysis_error(job_id, exc, event=event)
