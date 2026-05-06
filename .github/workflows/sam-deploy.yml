@@ -86,10 +86,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev --no-build
 
       - name: Run Pytest with Coverage
-        run: uv run pytest
+        run: uv run --locked --no-sync --no-build pytest
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
