@@ -56,7 +56,7 @@ Globals:
     Timeout: 10
     MemorySize: 128
     Architectures:
-      - arm64
+      - x86_64
     Layers:
       - !Ref DependenciesLayer
     Environment:
@@ -72,10 +72,10 @@ Resources:
       CompatibleRuntimes:
         - python3.12
       CompatibleArchitectures:
-        - arm64
+        - x86_64
     Metadata:
       BuildMethod: python3.12
-      BuildArchitecture: arm64
+      BuildArchitecture: x86_64
 
   ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
