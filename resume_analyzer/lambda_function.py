@@ -33,7 +33,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
+GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
 PDF_MAGIC_BYTES = b"%PDF"
 MAX_PDF_SIZE = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 MAX_GEMINI_RETRIES = 3
@@ -279,7 +279,7 @@ def _build_analysis_prompt(job_description: str) -> str:
 
 
 def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]:
-    """Calls Gemini 2.5 Flash with native PDF input and strict JSON schema output."""
+    """Calls Gemini 3 Flash Preview with native PDF input and strict JSON schema output."""
     response_schema = RESUME_ANALYSIS_RESPONSE_SCHEMA
     prompt = _build_analysis_prompt(job_description)
     contents = [
