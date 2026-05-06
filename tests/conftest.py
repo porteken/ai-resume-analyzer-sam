@@ -46,7 +46,7 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set up environment variables for all tests."""
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key-123")
     monkeypatch.setenv("GOOGLE_API_KEY_SECRET_ARN", "")
-    monkeypatch.setenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
+    monkeypatch.setenv("GEMINI_MODEL_ID", "gemini-3-flash-preview")
     monkeypatch.setenv("RESUME_BUCKET", "test-resume-bucket")
     monkeypatch.setenv("RESULTS_TABLE", "test-results-table")
     monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
