@@ -3,10 +3,12 @@ import http
 import json
 import logging
 import os
+import time
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+import boto3
 from botocore.exceptions import ClientError
 from google.genai import Client, types
 
@@ -16,8 +18,8 @@ try:
         RESUME_BUCKET,
         api_response,
         get_results_table,
+        get_s3_client,
         normalize_analysis_result,
-        s3_client,
     )
 except ImportError:
     from utils import (
@@ -25,14 +27,23 @@ except ImportError:
         RESUME_BUCKET,
         api_response,
         get_results_table,
+        get_s3_client,
         normalize_analysis_result,
-        s3_client,
     )
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-2.5-flash")
+PDF_MAGIC_BYTES = b"%PDF"
+MAX_PDF_SIZE = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+MAX_GEMINI_RETRIES = 3
+RETRY_BASE_DELAY_SECONDS = 1.0
+
+_genai_client: Any | None = None
+_genai_client_api_key: str | None = None
+_secrets_client: Any | None = None
+_cached_secret_arn: str | None = None
+_cached_google_api_key: str | None = None
 
 RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -71,6 +82,25 @@ RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        "education": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "institution": {"type": "string"},
+                    "degree": {"type": "string"},
+                    "field": {"type": "string"},
+                    "graduation_date": {"type": "string"},
+                },
+                "required": [
+                    "institution",
+                    "degree",
+                    "field",
+                    "graduation_date",
+                ],
+                "additionalProperties": False,
+            },
+        },
         "strengths": {
             "type": "array",
             "items": {"type": "string"},
@@ -90,12 +120,17 @@ RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
         "summary",
         "skills",
         "experience",
+        "education",
         "strengths",
         "gaps",
         "recommendations",
     ],
     "additionalProperties": False,
 }
+
+
+class UploadNotReadyError(Exception):
+    """Raised when the uploaded PDF is not yet ready for analysis."""
 
 
 def _parse_s3_url(s3_url: str) -> tuple[str, str]:
@@ -122,54 +157,165 @@ def _parse_s3_url(s3_url: str) -> tuple[str, str]:
     raise ValueError("s3_url must be a valid s3:// or https://...amazonaws.com URL")
 
 
-def _download_pdf_bytes(bucket: str, key: str) -> bytes:
+def _build_s3_kwargs(bucket: str, key: str) -> dict[str, Any]:
     kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key}
     if ACCOUNT_ID:
         kwargs["ExpectedBucketOwner"] = ACCOUNT_ID
+    return kwargs
 
-    obj = s3_client.get_object(**kwargs)
+
+def _ensure_pdf_object_ready(bucket: str, key: str) -> None:
+    try:
+        metadata = get_s3_client().head_object(**_build_s3_kwargs(bucket, key))
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            raise UploadNotReadyError(
+                "Uploaded resume not found yet. Please finish the upload and try again."
+            ) from exc
+        raise
+
+    content_length = metadata.get("ContentLength")
+    if isinstance(content_length, int):
+        if content_length <= 0:
+            raise UploadNotReadyError(
+                "Uploaded resume is empty. Please upload a valid PDF and try again."
+            )
+        if content_length > MAX_PDF_SIZE:
+            raise ValueError(f"PDF exceeds maximum size of {MAX_PDF_SIZE} bytes")
+
+
+def _download_pdf_bytes(bucket: str, key: str) -> bytes:
+    obj = get_s3_client().get_object(**_build_s3_kwargs(bucket, key))
     data = obj["Body"].read()
 
     if not data:
         raise ValueError("Downloaded PDF is empty")
+    if len(data) > MAX_PDF_SIZE:
+        raise ValueError(f"PDF exceeds maximum size of {MAX_PDF_SIZE} bytes")
+    if not data.startswith(PDF_MAGIC_BYTES):
+        raise ValueError("File does not appear to be a valid PDF")
     return data
 
 
+def _get_secrets_client() -> Any:
+    global _secrets_client  # noqa: PLW0603
+    if _secrets_client is None:
+        _secrets_client = boto3.client("secretsmanager")
+    return _secrets_client
+
+
+def _extract_google_api_key(secret_value: str) -> str:
+    text = secret_value.strip()
+    if not text:
+        raise RuntimeError("Secrets Manager secret does not contain a Google API key")
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    if isinstance(parsed, str) and parsed.strip():
+        return parsed.strip()
+
+    if isinstance(parsed, dict):
+        for field_name in ("GOOGLE_API_KEY", "google_api_key", "api_key"):
+            value = parsed.get(field_name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    raise RuntimeError("Secrets Manager secret does not contain a usable Google API key")
+
+
+def _get_google_api_key() -> str:
+    global _cached_secret_arn, _cached_google_api_key  # noqa: PLW0603
+
+    secret_arn = os.environ.get("GOOGLE_API_KEY_SECRET_ARN", "").strip()
+    if secret_arn:
+        if _cached_google_api_key is None or _cached_secret_arn != secret_arn:
+            response = _get_secrets_client().get_secret_value(SecretId=secret_arn)
+            secret_string = str(response.get("SecretString") or "")
+            _cached_google_api_key = _extract_google_api_key(secret_string)
+            _cached_secret_arn = secret_arn
+        return _cached_google_api_key
+
+    env_api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    if env_api_key:
+        _cached_secret_arn = None
+        _cached_google_api_key = None
+        return env_api_key
+
+    raise RuntimeError("GOOGLE_API_KEY environment variable not configured")
+
+
 def _get_genai_client() -> Any:
-    return Client(api_key=GOOGLE_API_KEY)
+    global _genai_client, _genai_client_api_key  # noqa: PLW0603
+    api_key = _get_google_api_key()
+    if _genai_client is None or _genai_client_api_key != api_key:
+        _genai_client = Client(api_key=api_key)
+        _genai_client_api_key = api_key
+    return _genai_client
 
 
-def _get_genai_types() -> Any:
-    return types
+def _build_analysis_prompt(job_description: str) -> str:
+    return (
+        "You are an expert technical recruiter and resume analyst. "
+        "Analyze this resume PDF against the provided job description and return JSON only "
+        "that exactly matches the supplied schema. "
+        "Use empty strings or empty arrays when the resume does not provide enough evidence. "
+        "Do not invent qualifications, employers, dates, education history, or certifications.\n\n"
+        "Field guidance:\n"
+        "- name: candidate full name.\n"
+        "- contact_info: email, phone, location, linkedin URL when available.\n"
+        "- summary: concise job-targeted summary grounded in the resume.\n"
+        "- skills: normalized list of relevant hard and soft skills.\n"
+        "- experience: each role with company, role, duration, and highlights.\n"
+        "- education: institution, degree, field, and graduation date for each entry.\n"
+        "- strengths: concrete ways the resume matches the job description.\n"
+        "- gaps: missing or weak evidence relative to the job description.\n"
+        "- recommendations: specific next steps tailored to this candidate and role.\n\n"
+        f"Job Description:\n{job_description}"
+    )
 
 
 def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]:
     """Calls Gemini 2.5 Flash with native PDF input and strict JSON schema output."""
-    if not GOOGLE_API_KEY:
-        raise RuntimeError("GOOGLE_API_KEY environment variable not configured")
-
-    types = _get_genai_types()
-
     response_schema = RESUME_ANALYSIS_RESPONSE_SCHEMA
-    prompt = (
-        "Analyze this resume PDF against the provided job description and return JSON only. "
-        "If a field is unknown, return an empty string or empty list. "
-        "Provide concise, job-targeted strengths, gaps, and recommendations as string arrays.\n\n"
-        f"Job Description:\n{job_description}"
-    )
+    prompt = _build_analysis_prompt(job_description)
+    contents = [
+        types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+        prompt,
+    ]
+    del pdf_bytes
 
-    response = _get_genai_client().models.generate_content(
-        model=GEMINI_MODEL_ID,
-        contents=[
-            types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-            prompt,
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_json_schema=response_schema,
-            temperature=0.2,
-        ),
-    )
+    response: Any | None = None
+    for attempt in range(MAX_GEMINI_RETRIES):
+        try:
+            response = _get_genai_client().models.generate_content(
+                model=GEMINI_MODEL_ID,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_json_schema=response_schema,
+                    temperature=0.2,
+                ),
+            )
+            break
+        except Exception as exc:
+            if _is_upstream_unavailable_error(exc) and attempt < MAX_GEMINI_RETRIES - 1:
+                delay = RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                logger.warning(
+                    "Gemini request unavailable; retrying in %.1fs (attempt %d/%d)",
+                    delay,
+                    attempt + 1,
+                    MAX_GEMINI_RETRIES,
+                )
+                time.sleep(delay)
+                continue
+            raise
+
+    if response is None:
+        raise RuntimeError("Gemini did not return a response")
 
     text = getattr(response, "text", None)
     if not text:
@@ -272,25 +418,21 @@ def _get_s3_location(request: dict[str, Any], job_record: dict[str, Any]) -> tup
 
 def _is_upstream_unavailable_error(exc: Exception) -> bool:
     """Detect transient upstream 503 errors (e.g., Gemini high demand)."""
-    message = str(exc)
-    type_name = type(exc).__name__
-
     status_code = getattr(exc, "status_code", None)
     code = getattr(exc, "code", None)
     if http.HTTPStatus.SERVICE_UNAVAILABLE in {status_code, code}:
         return True
 
+    type_name = type(exc).__name__
+    if type_name in {"ServerError", "ServiceUnavailable"}:
+        return True
+
+    message = str(exc)
     if "503" not in message:
         return False
 
-    unavailable_markers = (
-        "UNAVAILABLE",
-        "high demand",
-        "ServerError",
-        "'code': 503",
-        '"code": 503',
-    )
-    return type_name == "ServerError" or any(marker in message for marker in unavailable_markers)
+    unavailable_markers = ("UNAVAILABLE", "high demand", "service unavailable")
+    return any(marker in message for marker in unavailable_markers)
 
 
 def _handle_analysis_error(
@@ -322,28 +464,48 @@ def _handle_analysis_error(
     return api_response(500, {"error": "Internal server error"}, event=event)
 
 
-def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Lambda handler for resume analysis.
+def _get_existing_analysis_response(
+    job_id: str | None,
+    job_record: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, Any] | None:
+    existing_status = str(job_record.get("status", ""))
+    if existing_status == "completed" and job_record.get("analysis_result") is not None:
+        return api_response(
+            200,
+            {
+                "job_id": job_id,
+                "s3_bucket": job_record.get("s3_bucket"),
+                "s3_key": job_record.get("s3_key"),
+                "analysis_result": normalize_analysis_result(job_record.get("analysis_result")),
+                "message": "Analysis already completed",
+            },
+            event=event,
+        )
+    if existing_status == "processing":
+        return api_response(409, {"error": "Analysis is already in progress"}, event=event)
+    return None
 
-    Analyzes a resume PDF against a job description using Gemini AI.
-    Accepts either an S3 URL or bucket/key combination.
-    """
-    request, error = _extract_request(event)
-    if error:
-        return api_response(400, {"error": error}, event=event)
 
-    if request is None:
-        return api_response(400, {"error": "No body in request"}, event=event)
+def _resolve_job_description(request: dict[str, Any], job_record: dict[str, Any]) -> str:
+    if "job_description" in request:
+        return str(request.get("job_description", "General resume analysis"))
+    if job_record.get("job_description"):
+        return str(job_record["job_description"])
+    return "General resume analysis"
 
-    job_id = request.get("job_id")
-    job_description = str(request.get("job_description", "General resume analysis"))
-    job_record = _get_job_record(str(job_id)) if job_id else {}
 
-    if "job_description" not in request and job_record.get("job_description"):
-        job_description = str(job_record["job_description"])
-
+def _execute_analysis_request(
+    event: dict[str, Any],
+    request: dict[str, Any],
+    job_id: str | None,
+    job_record: dict[str, Any],
+    job_description: str,
+) -> dict[str, Any]:
     try:
         bucket, key = _get_s3_location(request, job_record)
+
+        _ensure_pdf_object_ready(bucket, key)
 
         if job_id:
             _update_job_status(job_id, "processing")
@@ -366,6 +528,35 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         )
     except S3LocationError as exc:
         return api_response(400, {"error": str(exc)}, event=event)
-    except Exception as exc:
-        logger.exception("Analysis handler failed")
+    except UploadNotReadyError as exc:
+        return api_response(409, {"error": str(exc)}, event=event)
+    except ValueError as exc:
+        if job_id:
+            _update_job_status(job_id, "failed", error=str(exc))
+        return api_response(400, {"error": str(exc)}, event=event)
+    except Exception as exc:  # noqa: BLE001
         return _handle_analysis_error(job_id, exc, event=event)
+
+
+def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+    """Lambda handler for resume analysis.
+
+    Analyzes a resume PDF against a job description using Gemini AI.
+    Accepts either an S3 URL or bucket/key combination.
+    """
+    request, error = _extract_request(event)
+    if error:
+        return api_response(400, {"error": error}, event=event)
+
+    if request is None:
+        return api_response(400, {"error": "No body in request"}, event=event)
+
+    job_id = request.get("job_id")
+    job_record = _get_job_record(str(job_id)) if job_id else {}
+    job_description = _resolve_job_description(request, job_record)
+
+    existing_response = _get_existing_analysis_response(job_id, job_record, event)
+    if existing_response is not None:
+        return existing_response
+
+    return _execute_analysis_request(event, request, job_id, job_record, job_description)

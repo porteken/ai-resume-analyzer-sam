@@ -45,6 +45,7 @@ TEST_ORIGIN = "https://test.example.com"
 def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set up environment variables for all tests."""
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key-123")
+    monkeypatch.setenv("GOOGLE_API_KEY_SECRET_ARN", "")
     monkeypatch.setenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
     monkeypatch.setenv("RESUME_BUCKET", "test-resume-bucket")
     monkeypatch.setenv("RESULTS_TABLE", "test-results-table")
@@ -55,7 +56,7 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     from resume_analyzer import utils
 
     monkeypatch.setattr(utils, "CORS_ALLOWED_ORIGINS", {TEST_ORIGIN})
-    utils.reset_results_table()
+    utils.reset_cached_clients()
 
 
 @pytest.fixture
@@ -69,7 +70,8 @@ def mock_boto3_clients() -> dict[str, Any]:
         "Metadata": {"job_id": "test-job-123", "job_description": "Test description"},
     }
     mock_s3_client.head_object.return_value = {
-        "Metadata": {"job_id": "test-job-123", "job_description": "Test description"}
+        "ContentLength": 128,
+        "Metadata": {"job_id": "test-job-123", "job_description": "Test description"},
     }
     mock_s3_client.put_object.return_value = {"ETag": "mock-etag"}
     mock_s3_client.generate_presigned_post.return_value = {
@@ -107,6 +109,7 @@ def mock_boto3_clients() -> dict[str, Any]:
                         "highlights": ["Built APIs"],
                     }
                 ],
+                "education": [],
                 "strengths": ["Strong Python and AWS delivery experience"],
                 "gaps": ["No direct ML production ownership"],
                 "recommendations": ["Add ML deployment examples"],
@@ -188,9 +191,7 @@ def mock_lambda_context() -> MagicMock:
     context = MagicMock()
     context.function_name = "test-function"
     context.function_version = "$LATEST"
-    context.invoked_function_arn = (
-        "arn:aws:lambda:us-east-1:123456789012:function:test-function"
-    )
+    context.invoked_function_arn = "arn:aws:lambda:us-east-1:123456789012:function:test-function"
     context.memory_limit_in_mb = 512
     context.aws_request_id = "test-request-id"
     context.log_group_name = "/aws/lambda/test-function"

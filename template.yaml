@@ -6,8 +6,14 @@ Description: AI Resume Analyzer using S3 presigned uploads and Gemini 2.5 Flash 
 Parameters:
   GoogleApiKey:
     Type: String
+    Default: ""
     NoEcho: true
-    Description: Google Gemini API key (kept secret).
+    Description: Optional Google Gemini API key fallback when Secrets Manager is not used.
+
+  GoogleApiKeySecretArn:
+    Type: String
+    Default: ""
+    Description: Optional Secrets Manager secret ARN containing the Google Gemini API key.
 
   ApiStageName:
     Type: String
@@ -42,12 +48,15 @@ Parameters:
 Conditions:
   UseS3AccessLogging: !Equals [!Ref EnableS3AccessLogging, "true"]
   UseAccessLogsAuditBucket: !Not [!Equals [!Ref AccessLogsAuditBucketName, ""]]
+  UseGoogleApiKeySecretArn: !Not [!Equals [!Ref GoogleApiKeySecretArn, ""]]
 
 Globals:
   Function:
     Runtime: python3.12
     Timeout: 10
     MemorySize: 128
+    Architectures:
+      - x86_64
     Layers:
       - !Ref DependenciesLayer
     Environment:
@@ -62,6 +71,8 @@ Resources:
       ContentUri: layers/dependencies/
       CompatibleRuntimes:
         - python3.12
+      CompatibleArchitectures:
+        - x86_64
     Metadata:
       BuildMethod: python3.12
       BuildArchitecture: x86_64
@@ -162,6 +173,16 @@ Resources:
             ExposedHeaders:
               - ETag
             MaxAge: 300
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireUploads
+            Status: Enabled
+            Prefix: uploads/
+            ExpirationInDays: 1
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
 
   ResumeS3BucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -220,7 +241,6 @@ Resources:
             - Effect: Allow
               Action:
                 - s3:PutObject
-                - s3:PutObjectAcl
               Resource: !Sub arn:aws:s3:::${ResumeS3Bucket}/*
             - Effect: Allow
               Action:
@@ -241,7 +261,8 @@ Resources:
       CodeUri: resume_analyzer/
       Handler: lambda_function.lambda_handler
       Timeout: 60
-      MemorySize: 384
+      MemorySize: 512
+      ReservedConcurrentExecutions: 10
 
       Policies:
         - Statement:
@@ -255,10 +276,19 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt ResultsTable.Arn
+        - !If
+          - UseGoogleApiKeySecretArn
+          - Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref GoogleApiKeySecretArn
+          - !Ref AWS::NoValue
 
       Environment:
         Variables:
           GOOGLE_API_KEY: !Ref GoogleApiKey
+          GOOGLE_API_KEY_SECRET_ARN: !Ref GoogleApiKeySecretArn
           GEMINI_MODEL_ID: gemini-2.5-flash
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable

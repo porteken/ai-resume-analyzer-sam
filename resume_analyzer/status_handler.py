@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 
 try:
@@ -24,6 +25,16 @@ def _get_job_item(job_id: str) -> dict[str, Any] | None:
     return response.get("Item")
 
 
+def _is_job_expired(ttl_value: Any) -> bool:
+    if ttl_value in (None, ""):
+        return False
+
+    try:
+        return int(ttl_value) <= int(time.time())
+    except (TypeError, ValueError):
+        return False
+
+
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     """Status handler that returns the analysis result for a given job ID."""
     logger.info("Status handler invoked")
@@ -37,6 +48,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         item = _get_job_item(job_id)
         if not item:
             return api_response(404, {"error": "Job not found"}, event=event)
+        if _is_job_expired(item.get("ttl")):
+            return api_response(404, {"error": "Job has expired"}, event=event)
 
         result: dict[str, Any] = {
             "job_id": job_id,
@@ -46,9 +59,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         }
 
         if item.get("status") == "completed":
-            result["analysis_result"] = normalize_analysis_result(
-                item.get("analysis_result")
-            )
+            result["analysis_result"] = normalize_analysis_result(item.get("analysis_result"))
         elif item.get("status") == "failed":
             result["error"] = item.get("error")
 

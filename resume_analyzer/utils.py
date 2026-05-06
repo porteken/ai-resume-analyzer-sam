@@ -7,20 +7,41 @@ import boto3
 
 logger = logging.getLogger(__name__)
 
-dynamodb: Any = boto3.resource("dynamodb")
-s3_client = boto3.client("s3")
-
 RESULTS_TABLE = os.environ.get("RESULTS_TABLE")
 RESUME_BUCKET = os.environ.get("RESUME_BUCKET")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 
 
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "")
-CORS_ALLOWED_ORIGINS: set[str] = {
-    o.strip().rstrip("/") for o in _cors_raw.split(",") if o.strip()
-}
+CORS_ALLOWED_ORIGINS: set[str] = {o.strip().rstrip("/") for o in _cors_raw.split(",") if o.strip()}
 
+dynamodb: Any | None = None
+s3_client: Any | None = None
 _results_table: Any | None = None
+
+
+def get_dynamodb_resource() -> Any:
+    """Lazily initialise and return the DynamoDB resource."""
+    global dynamodb  # noqa: PLW0603
+    if dynamodb is None:
+        dynamodb = boto3.resource("dynamodb")
+    return dynamodb
+
+
+def get_s3_client() -> Any:
+    """Lazily initialise and return the S3 client."""
+    global s3_client  # noqa: PLW0603
+    if s3_client is None:
+        s3_client = boto3.client("s3")
+    return s3_client
+
+
+def reset_cached_clients() -> None:
+    """Reset cached boto3 clients and table references used by tests."""
+    global dynamodb, s3_client, _results_table  # noqa: PLW0603
+    dynamodb = None
+    s3_client = None
+    _results_table = None
 
 
 def get_results_table() -> Any:
@@ -29,7 +50,7 @@ def get_results_table() -> Any:
     if _results_table is None:
         if not RESULTS_TABLE:
             raise RuntimeError("RESULTS_TABLE environment variable not configured")
-        _results_table = dynamodb.Table(RESULTS_TABLE)
+        _results_table = get_dynamodb_resource().Table(RESULTS_TABLE)
     return _results_table
 
 
@@ -83,6 +104,13 @@ def coerce_string_list(value: Any) -> list[str]:
     return result
 
 
+def coerce_object_list(value: Any) -> list[dict[str, Any]]:
+    """Coerce a value into a clean list of dictionaries."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def normalize_analysis_result(analysis: Any, *, strict: bool = False) -> dict[str, Any]:
     """Normalise an analysis dict, back-filling list fields.
 
@@ -95,6 +123,9 @@ def normalize_analysis_result(analysis: Any, *, strict: bool = False) -> dict[st
         return analysis
 
     normalized = dict(analysis)
+    normalized["skills"] = coerce_string_list(normalized.get("skills"))
+    for field in ("experience", "education"):
+        normalized[field] = coerce_object_list(normalized.get(field))
     for field in ("strengths", "gaps", "recommendations"):
         normalized[field] = coerce_string_list(normalized.get(field))
     return normalized
