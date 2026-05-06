@@ -80,22 +80,18 @@ jobs:
           fetch-depth: 0  
 
       - name: Setup uv
-        if: github.ref_name != 'prd'
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
 
       - name: Install dependencies
-        if: github.ref_name != 'prd'
         run: uv sync --all-extras --dev
 
       - name: Run Pytest with Coverage
-        if: github.ref_name != 'prd'
         run: uv run pytest
 
       - name: SonarQube Scan
-        if: github.ref_name != 'prd'
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
         with:
           args: -Dsonar.python.coverage.reportPaths=coverage.xml
@@ -290,6 +286,7 @@ jobs:
       - name: Deploy SAM Application
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_API_KEY_SECRET_ARN: ${{ secrets.GOOGLE_API_KEY_SECRET_ARN }}
           SAM_CLI_TELEMETRY: "0"
         run: |
           set -euo pipefail
@@ -301,6 +298,10 @@ jobs:
             "AllowedOrigins=$ALLOWED_ORIGINS"
             "EnableS3AccessLogging=$ENABLE_S3_ACCESS_LOGGING"
           )
+
+          if [[ -n "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
+            PARAM_OVERRIDES+=("GoogleApiKeySecretArn=$GOOGLE_API_KEY_SECRET_ARN")
+          fi
           
           if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
@@ -470,7 +471,7 @@ jobs:
               --resource-id "$resource_id" \
               --http-method OPTIONS \
               --status-code 200 \
-              --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='${ALLOWED_ORIGINS%%,*}'" >/dev/null || true
+              --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='*'" >/dev/null || true
           }
 
           

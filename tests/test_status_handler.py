@@ -1,5 +1,6 @@
 """Unit tests for status_handler.py."""
 
+import time
 from typing import Any
 
 import pytest
@@ -51,6 +52,7 @@ class TestStatusHandler:
                     "summary": "Strong profile",
                     "skills": ["Python"],
                     "experience": [],
+                    "education": [],
                     "strengths": ["Python backend expertise"],
                     "gaps": [],
                     "recommendations": [],
@@ -58,9 +60,7 @@ class TestStatusHandler:
             }
         }
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 
         body = assert_success_response(
             response,
@@ -92,12 +92,8 @@ class TestStatusHandler:
             }
         }
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
-        body = assert_success_response(
-            response, 200, required_fields=["analysis_result"]
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
+        body = assert_success_response(response, 200, required_fields=["analysis_result"])
 
         assert body["analysis_result"]["strengths"] == []
         assert body["analysis_result"]["gaps"] == []
@@ -120,13 +116,9 @@ class TestStatusHandler:
             }
         }
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 
-        body = assert_success_response(
-            response, 200, required_fields=["job_id", "status"]
-        )
+        body = assert_success_response(response, 200, required_fields=["job_id", "status"])
 
         assert body["status"] == "processing"
         assert "analysis_result" not in body
@@ -149,13 +141,9 @@ class TestStatusHandler:
             }
         }
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 
-        body = assert_success_response(
-            response, 200, required_fields=["job_id", "status", "error"]
-        )
+        body = assert_success_response(response, 200, required_fields=["job_id", "status", "error"])
 
         assert body["status"] == "failed"
         assert body["error"] == "PDF parsing failed"
@@ -171,10 +159,27 @@ class TestStatusHandler:
         """Test retrieving a non-existent job."""
         mock_boto3_clients["dynamodb_table"].get_item.return_value = {}
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
         assert_error_response(response, 404, "Job not found")
+
+    def test_expired_job_returns_not_found(
+        self,
+        status_handler_module,
+        sample_status_event,
+        mock_lambda_context,
+        mock_boto3_clients,
+    ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "completed",
+                "ttl": int(time.time()) - 60,
+            }
+        }
+
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
+
+        assert_error_response(response, 404, "expired")
 
     @pytest.mark.parametrize(
         ("event", "expected_error"),
@@ -201,13 +206,9 @@ class TestStatusHandler:
         mock_boto3_clients,
     ) -> None:
         """Test error handling when DynamoDB fails."""
-        mock_boto3_clients["dynamodb_table"].get_item.side_effect = Exception(
-            "DynamoDB error"
-        )
+        mock_boto3_clients["dynamodb_table"].get_item.side_effect = Exception("DynamoDB error")
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 
         assert_error_response(response, 500)
 
@@ -223,13 +224,9 @@ class TestStatusHandler:
             "Item": {"job_id": "test-job-123", "filename": "test-resume.pdf"}
         }
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 
-        body = assert_success_response(
-            response, 200, required_fields=["job_id", "status"]
-        )
+        body = assert_success_response(response, 200, required_fields=["job_id", "status"])
         assert body["status"] == "unknown"
 
     def test_optional_fields_handling(
@@ -244,20 +241,14 @@ class TestStatusHandler:
             "Item": {"job_id": "test-job-123", "status": "completed"}
         }
 
-        response = status_handler_module.lambda_handler(
-            sample_status_event, mock_lambda_context
-        )
+        response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 
-        body = assert_success_response(
-            response, 200, required_fields=["job_id", "status"]
-        )
+        body = assert_success_response(response, 200, required_fields=["job_id", "status"])
 
         assert body["filename"] is None
         assert body["created_at"] is None
 
-    def test_results_table_not_configured(
-        self, status_handler_module, mock_lambda_context
-    ) -> None:
+    def test_results_table_not_configured(self, status_handler_module, mock_lambda_context) -> None:
         """Test RuntimeError when RESULTS_TABLE is not set."""
         original = status_handler_module.get_results_table
 

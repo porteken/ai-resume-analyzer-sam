@@ -13,14 +13,14 @@ try:
         RESUME_BUCKET,
         api_response,
         get_results_table,
-        s3_client,
+        get_s3_client,
     )
 except ImportError:
     from utils import (
         RESUME_BUCKET,
         api_response,
         get_results_table,
-        s3_client,
+        get_s3_client,
     )
 
 UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
@@ -87,7 +87,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             ["content-length-range", 1, MAX_UPLOAD_BYTES],
         ]
 
-        presigned_post = s3_client.generate_presigned_post(
+        presigned_post = get_s3_client().generate_presigned_post(
             Bucket=RESUME_BUCKET,
             Key=s3_key,
             Fields=fields,

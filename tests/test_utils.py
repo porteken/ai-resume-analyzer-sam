@@ -22,9 +22,9 @@ def assert_response_structure(
 ) -> None:
     """Assert that a response has the correct API Gateway structure."""
     assert "statusCode" in response, "Response must contain statusCode"
-    assert (
-        response["statusCode"] == expected_status
-    ), f"Expected status {expected_status}, got {response['statusCode']}"
+    assert response["statusCode"] == expected_status, (
+        f"Expected status {expected_status}, got {response['statusCode']}"
+    )
 
     if should_have_body:
         assert "body" in response, "Response must contain body"
@@ -49,9 +49,9 @@ def assert_error_response(
     assert "error" in body, "Error response must contain 'error' field"
 
     if expected_error_message:
-        assert (
-            expected_error_message in body["error"]
-        ), f"Expected error message to contain '{expected_error_message}', got '{body['error']}'"
+        assert expected_error_message in body["error"], (
+            f"Expected error message to contain '{expected_error_message}', got '{body['error']}'"
+        )
 
     return body
 
@@ -107,8 +107,6 @@ def create_mock_context(
     context.function_name = function_name
     context.aws_request_id = request_id
     context.memory_limit_in_mb = memory_limit
-    context.invoked_function_arn = (
-        f"arn:aws:lambda:us-east-1:123456789012:function:{function_name}"
-    )
+    context.invoked_function_arn = f"arn:aws:lambda:us-east-1:123456789012:function:{function_name}"
 
     return context
