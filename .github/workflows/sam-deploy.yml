@@ -92,6 +92,7 @@ jobs:
         run: uv run --locked --no-sync --no-build pytest
 
       - name: SonarQube Scan
+        if: github.ref == 'refs/heads/dev'
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
         with:
           args: -Dsonar.python.coverage.reportPaths=coverage.xml
