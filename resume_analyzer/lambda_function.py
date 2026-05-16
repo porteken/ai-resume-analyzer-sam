@@ -302,10 +302,10 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
             )
             break
         except Exception as exc:
-            if _is_upstream_unavailable_error(exc) and attempt < MAX_GEMINI_RETRIES - 1:
+            if _is_retryable_upstream_error(exc) and attempt < MAX_GEMINI_RETRIES - 1:
                 delay = RETRY_BASE_DELAY_SECONDS * (2**attempt)
                 logger.warning(
-                    "Gemini request unavailable; retrying in %.1fs (attempt %d/%d)",
+                    "Gemini request hit a retryable upstream error; retrying in %.1fs (attempt %d/%d)",
                     delay,
                     attempt + 1,
                     MAX_GEMINI_RETRIES,
@@ -416,23 +416,42 @@ def _get_s3_location(request: dict[str, Any], job_record: dict[str, Any]) -> tup
     return bucket, key
 
 
-def _is_upstream_unavailable_error(exc: Exception) -> bool:
-    """Detect transient upstream 503 errors (e.g., Gemini high demand)."""
+def _is_retryable_upstream_error(exc: Exception) -> bool:
+    """Detect transient upstream 429/503 errors that should be retried."""
     status_code = getattr(exc, "status_code", None)
     code = getattr(exc, "code", None)
-    if http.HTTPStatus.SERVICE_UNAVAILABLE in {status_code, code}:
+
+    codes = {candidate for candidate in (status_code, code) if candidate is not None}
+    if http.HTTPStatus.SERVICE_UNAVAILABLE in codes:
+        return True
+    if http.HTTPStatus.TOO_MANY_REQUESTS in codes:
+        return True
+
+    normalized_codes = {str(candidate).strip() for candidate in codes}
+    if {"503", "429"} & normalized_codes:
         return True
 
     type_name = type(exc).__name__
-    if type_name in {"ServerError", "ServiceUnavailable"}:
+    if type_name in {
+        "ServerError",
+        "ServiceUnavailable",
+        "TooManyRequests",
+        "RateLimitError",
+        "ResourceExhausted",
+    }:
         return True
 
-    message = str(exc)
-    if "503" not in message:
-        return False
-
-    unavailable_markers = ("UNAVAILABLE", "high demand", "service unavailable")
-    return any(marker in message for marker in unavailable_markers)
+    message = str(exc).lower()
+    retryable_markers = (
+        "503",
+        "429",
+        "high demand",
+        "service unavailable",
+        "too many requests",
+        "rate limit",
+        "quota",
+    )
+    return any(marker in message for marker in retryable_markers)
 
 
 def _handle_analysis_error(
@@ -449,9 +468,9 @@ def _handle_analysis_error(
             _update_job_status(job_id, "failed", error=message)
         return api_response(500, {"error": message}, event=event)
 
-    if _is_upstream_unavailable_error(exc):
+    if _is_retryable_upstream_error(exc):
         message = (
-            "Analysis service is temporarily unavailable due to high demand. "
+            "Analysis service is temporarily unavailable due to high demand or rate limiting. "
             "Please try again in a few minutes."
         )
         if job_id:
