@@ -73,9 +73,6 @@ Resources:
         - python3.12
       CompatibleArchitectures:
         - x86_64
-    Metadata:
-      BuildMethod: python3.12
-      BuildArchitecture: x86_64
 
   ResumeS3AccessLogsBucket:
     Type: AWS::S3::Bucket
