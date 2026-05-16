@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +20,17 @@ dynamodb: Any | None = None
 s3_client: Any | None = None
 _results_table: Any | None = None
 
+_BOTO_CLIENT_CONFIG = Config(
+    tcp_keepalive=True,
+    retries={"max_attempts": 3, "mode": "standard"},
+)
+
 
 def get_dynamodb_resource() -> Any:
     """Lazily initialise and return the DynamoDB resource."""
     global dynamodb  # noqa: PLW0603
     if dynamodb is None:
-        dynamodb = boto3.resource("dynamodb")
+        dynamodb = boto3.resource("dynamodb", config=_BOTO_CLIENT_CONFIG)
     return dynamodb
 
 
@@ -32,7 +38,7 @@ def get_s3_client() -> Any:
     """Lazily initialise and return the S3 client."""
     global s3_client  # noqa: PLW0603
     if s3_client is None:
-        s3_client = boto3.client("s3")
+        s3_client = boto3.client("s3", config=_BOTO_CLIENT_CONFIG)
     return s3_client
 
 

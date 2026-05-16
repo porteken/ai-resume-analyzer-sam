@@ -99,6 +99,21 @@ class FakeServerUnavailableError(Exception):
         self.code = 503
 
 
+class FakeRateLimitError(Exception):
+    def __init__(
+        self,
+        message: str = "429 rate limit exceeded",
+        *,
+        status_code: int | None = 429,
+        code: int | str | None = None,
+    ) -> None:
+        super().__init__(message)
+        if status_code is not None:
+            self.status_code = status_code
+        if code is not None:
+            self.code = code
+
+
 @pytest.mark.unit
 class TestGeminiAnalysis:
     """Tests for Gemini 3 Flash Preview PDF analysis path."""
@@ -292,6 +307,55 @@ class TestGeminiAnalysis:
         assert_success_response(response, 200, required_fields=["analysis_result"])
         assert sleep_calls == [1.0, 2.0]
         assert mock_client.models.generate_content.call_count == 3
+
+    def test_analyze_retries_rate_limit_errors(
+        self,
+        lambda_function_module: Any,
+        sample_analyze_event: dict[str, Any],
+        mock_lambda_context: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            lambda_function_module.time,
+            "sleep",
+            sleep_calls.append,
+        )
+
+        mock_client = lambda_function_module._get_genai_client()
+        mock_client.models.generate_content.side_effect = [
+            FakeRateLimitError(),
+            mock_client.models.generate_content.return_value,
+        ]
+
+        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+
+        assert_success_response(response, 200, required_fields=["analysis_result"])
+        assert sleep_calls == [1.0]
+        assert mock_client.models.generate_content.call_count == 2
+
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (FakeServerUnavailableError(), True),
+            (FakeRateLimitError(status_code=429), True),
+            (
+                FakeRateLimitError(
+                    message="Quota exceeded because of rate limit", status_code=None
+                ),
+                True,
+            ),
+            (FakeRateLimitError(message="TooManyRequests", status_code=None, code="429"), True),
+            (Exception("Completely different error"), False),
+        ],
+    )
+    def test_retryable_upstream_error_detection(
+        self,
+        lambda_function_module: Any,
+        exc: Exception,
+        expected: bool,
+    ) -> None:
+        assert lambda_function_module._is_retryable_upstream_error(exc) is expected
 
     def test_analyze_uses_secret_manager_api_key(
         self,
