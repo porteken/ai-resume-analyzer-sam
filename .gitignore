@@ -11,6 +11,8 @@ coverage.xml
 
 .aws-sam/
 
+requirements.txt
+
 .vscode/
 .idea/
 *.swp
