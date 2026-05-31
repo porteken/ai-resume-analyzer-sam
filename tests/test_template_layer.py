@@ -31,13 +31,15 @@ def test_dependencies_layer_uses_prebuilt_python_directory() -> None:
 
 
 @pytest.mark.unit
-def test_template_uses_secrets_manager_only_for_gemini_key() -> None:
-    """Ensure Gemini configuration no longer exposes plaintext key fallback."""
+def test_template_prefers_secrets_manager_for_gemini_key() -> None:
+    """Ensure Gemini supports Secrets Manager while retaining a CI-compatible fallback."""
     template = Path("template.yaml").read_text(encoding="utf-8")
 
-    assert "\n  GoogleApiKey:\n" not in template
-    assert "\n          GOOGLE_API_KEY:" not in template
+    assert "\n  GoogleApiKey:\n" in template
+    assert "NoEcho: true" in template
+    assert "\n          GOOGLE_API_KEY:" in template
     assert "GOOGLE_API_KEY_SECRET_ARN:" in template
+    assert "UseGoogleApiKeySecretArn" in template
     assert "secretsmanager:GetSecretValue" in template
 
 

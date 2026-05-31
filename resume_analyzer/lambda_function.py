@@ -248,7 +248,15 @@ def _get_google_api_key() -> str:
             _cached_secret_arn = secret_arn
         return _cached_google_api_key
 
-    raise RuntimeError("GOOGLE_API_KEY_SECRET_ARN environment variable not configured")
+    env_api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    if env_api_key:
+        _cached_secret_arn = None
+        _cached_google_api_key = None
+        return env_api_key
+
+    raise RuntimeError(
+        "GOOGLE_API_KEY_SECRET_ARN or GOOGLE_API_KEY environment variable not configured"
+    )
 
 
 def _get_genai_client() -> Any:

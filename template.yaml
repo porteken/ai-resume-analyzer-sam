@@ -4,8 +4,15 @@ Transform: AWS::Serverless-2016-10-31
 Description: AI Resume Analyzer using S3 presigned uploads and Gemini 3 Flash Preview multimodal PDF analysis.
 
 Parameters:
+  GoogleApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Optional Google Gemini API key fallback when Secrets Manager is not used. Prefer GoogleApiKeySecretArn for production deployments.
+
   GoogleApiKeySecretArn:
     Type: String
+    Default: ""
     Description: Secrets Manager secret ARN containing the Google Gemini API key.
 
   ApiStageName:
@@ -41,6 +48,7 @@ Parameters:
 Conditions:
   UseS3AccessLogging: !Equals [!Ref EnableS3AccessLogging, "true"]
   UseAccessLogsAuditBucket: !Not [!Equals [!Ref AccessLogsAuditBucketName, ""]]
+  UseGoogleApiKeySecretArn: !Not [!Equals [!Ref GoogleApiKeySecretArn, ""]]
 Globals:
   Function:
     Runtime: python3.12
@@ -269,13 +277,18 @@ Resources:
               Action:
                 - lambda:InvokeFunction
               Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-AnalyzeFunction
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-              Resource: !Ref GoogleApiKeySecretArn
+        - !If
+          - UseGoogleApiKeySecretArn
+          - Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref GoogleApiKeySecretArn
+          - !Ref AWS::NoValue
 
       Environment:
         Variables:
+          GOOGLE_API_KEY: !If [UseGoogleApiKeySecretArn, "", !Ref GoogleApiKey]
           GOOGLE_API_KEY_SECRET_ARN: !Ref GoogleApiKeySecretArn
           GEMINI_MODEL_ID: gemini-3-flash-preview
           RESUME_BUCKET: !Ref ResumeS3Bucket

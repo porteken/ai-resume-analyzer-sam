@@ -335,33 +335,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -z "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
-            if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
-              echo "::error::Set either GOOGLE_API_KEY_SECRET_ARN or GOOGLE_API_KEY in GitHub secrets."
-              exit 1
-            fi
-
-            SECRET_NAME="${SAM_STACK_NAME}/google-api-key"
-            if SECRET_ARN="$(
-              aws secretsmanager describe-secret \
-                --secret-id "$SECRET_NAME" \
-                --query ARN \
-                --output text 2>/dev/null
-            )"; then
-              aws secretsmanager put-secret-value \
-                --secret-id "$SECRET_NAME" \
-                --secret-string "$GOOGLE_API_KEY" >/dev/null
-            else
-              SECRET_ARN="$(
-                aws secretsmanager create-secret \
-                  --name "$SECRET_NAME" \
-                  --description "Google Gemini API key for ${SAM_STACK_NAME}" \
-                  --secret-string "$GOOGLE_API_KEY" \
-                  --query ARN \
-                  --output text
-              )"
-            fi
-            GOOGLE_API_KEY_SECRET_ARN="$SECRET_ARN"
+          if [[ -z "${GOOGLE_API_KEY_SECRET_ARN:-}" && -z "${GOOGLE_API_KEY:-}" ]]; then
+            echo "::error::Set either GOOGLE_API_KEY_SECRET_ARN or GOOGLE_API_KEY in GitHub secrets."
+            exit 1
           fi
 
           
@@ -370,8 +346,13 @@ jobs:
             "ExistingApiId=$SHARED_REST_API_ID"
             "AllowedOrigins=$ALLOWED_ORIGINS"
             "EnableS3AccessLogging=$ENABLE_S3_ACCESS_LOGGING"
-            "GoogleApiKeySecretArn=$GOOGLE_API_KEY_SECRET_ARN"
           )
+
+          if [[ -n "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
+            PARAM_OVERRIDES+=("GoogleApiKeySecretArn=$GOOGLE_API_KEY_SECRET_ARN")
+          elif [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+            PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
+          fi
 
           
           set +e
