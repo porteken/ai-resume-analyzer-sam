@@ -3,7 +3,7 @@
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -130,9 +130,7 @@ class TestStatusCodes:
             (500, 500, 600),
         ],
     )
-    def test_status_code_ranges(
-        self, status_code: int, lower_bound: int, upper_bound: int
-    ) -> None:
+    def test_status_code_ranges(self, status_code: int, lower_bound: int, upper_bound: int) -> None:
         """Test understanding of HTTP status code ranges."""
         assert lower_bound <= status_code < upper_bound
 
@@ -165,7 +163,7 @@ class TestStringManipulation:
 
     def test_s3_key_generation(self) -> None:
         """Test S3 key format."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         job_id = "test-job-123"
         filename = "resume.pdf"
 
