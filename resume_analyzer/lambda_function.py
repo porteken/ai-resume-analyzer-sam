@@ -1,4 +1,5 @@
 import base64
+import binascii
 import http
 import json
 import logging
@@ -17,6 +18,7 @@ try:
         ACCOUNT_ID,
         RESUME_BUCKET,
         api_response,
+        get_lambda_client,
         get_results_table,
         get_s3_client,
         normalize_analysis_result,
@@ -26,6 +28,7 @@ except ImportError:
         ACCOUNT_ID,
         RESUME_BUCKET,
         api_response,
+        get_lambda_client,
         get_results_table,
         get_s3_client,
         normalize_analysis_result,
@@ -36,8 +39,10 @@ logger = logging.getLogger(__name__)
 GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
 PDF_MAGIC_BYTES = b"%PDF"
 MAX_PDF_SIZE = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+MAX_JOB_DESCRIPTION_LENGTH = int(os.environ.get("MAX_JOB_DESCRIPTION_LENGTH", "5000"))
 MAX_GEMINI_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
+INTERNAL_WORKER_SOURCE = "resume-analyzer.worker"
 
 _genai_client: Any | None = None
 _genai_client_api_key: str | None = None
@@ -131,6 +136,10 @@ RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
 
 class UploadNotReadyError(Exception):
     """Raised when the uploaded PDF is not yet ready for analysis."""
+
+
+class JobTransitionError(Exception):
+    """Raised when a conditional job status transition fails."""
 
 
 def _parse_s3_url(s3_url: str) -> tuple[str, str]:
@@ -245,7 +254,9 @@ def _get_google_api_key() -> str:
         _cached_google_api_key = None
         return env_api_key
 
-    raise RuntimeError("GOOGLE_API_KEY environment variable not configured")
+    raise RuntimeError(
+        "GOOGLE_API_KEY_SECRET_ARN or GOOGLE_API_KEY environment variable not configured"
+    )
 
 
 def _get_genai_client() -> Any:
@@ -327,11 +338,20 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
         raise RuntimeError(f"Gemini returned non-JSON output: {text[:200]}") from exc
 
 
+def _conditional_check_failed(exc: Exception) -> bool:
+    return (
+        isinstance(exc, ClientError)
+        and exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
+    )
+
+
 def _update_job_status(
     job_id: str | None,
     status_value: str,
     analysis_result: dict[str, Any] | None = None,
     error: str | None = None,
+    *,
+    expected_statuses: set[str] | None = None,
 ) -> None:
     if not job_id:
         return
@@ -344,6 +364,7 @@ def _update_job_status(
     expression = "SET #status = :status"
     names = {"#status": "status"}
     values: dict[str, Any] = {":status": status_value}
+    condition = "attribute_exists(job_id)"
 
     if analysis_result is not None:
         expression += ", analysis_result = :result, completed_at = :completed"
@@ -355,15 +376,257 @@ def _update_job_status(
         names["#error"] = "error"
         values[":error"] = error
 
+    if expected_statuses:
+        placeholders: list[str] = []
+        for index, expected in enumerate(sorted(expected_statuses)):
+            placeholder = f":expected{index}"
+            placeholders.append(placeholder)
+            values[placeholder] = expected
+        condition += f" AND #status IN ({', '.join(placeholders)})"
+
     try:
-        table.update_item(
-            Key={"job_id": job_id},
-            UpdateExpression=expression,
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
+        kwargs: dict[str, Any] = {
+            "Key": {"job_id": job_id},
+            "UpdateExpression": expression,
+            "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": values,
+            "ConditionExpression": condition,
+        }
+        table.update_item(**kwargs)
+    except Exception as exc:
+        if _conditional_check_failed(exc):
+            raise JobTransitionError("Job is not in an expected state") from exc
+        logger.exception("Failed to update DynamoDB status")
+
+
+def _mark_job_queued(job_id: str) -> bool:
+    try:
+        _update_job_status(job_id, "queued", expected_statuses={"upload_pending", "failed"})
+        return True
+    except JobTransitionError:
+        return False
+
+
+def _claim_job_for_processing(job_id: str) -> bool:
+    try:
+        _update_job_status(job_id, "processing", expected_statuses={"queued"})
+        return True
+    except JobTransitionError:
+        return False
+
+
+def _set_job_failed(job_id: str | None, error: str) -> None:
+    try:
+        _update_job_status(job_id, "failed", error=error)
+    except JobTransitionError:
+        logger.info("Skipping failed status update because the job no longer exists")
+
+
+def _set_job_completed(job_id: str, analysis_result: dict[str, Any]) -> None:
+    try:
+        _update_job_status(
+            job_id,
+            "completed",
+            analysis_result=analysis_result,
+            expected_statuses={"processing"},
         )
-    except Exception:
-        logger.exception("Failed to update DynamoDB status for job_id=%s", job_id)
+    except JobTransitionError:
+        logger.warning("Skipping completed status update because the job was not processing")
+
+
+def _invoke_worker(job_id: str) -> None:
+    function_name = os.environ.get("ANALYZE_FUNCTION_NAME") or os.environ.get(
+        "AWS_LAMBDA_FUNCTION_NAME"
+    )
+    if not function_name:
+        raise RuntimeError("ANALYZE_FUNCTION_NAME environment variable not configured")
+
+    get_lambda_client().invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps({"source": INTERNAL_WORKER_SOURCE, "job_id": job_id}).encode("utf-8"),
+    )
+
+
+def _build_status_url(event: dict[str, Any], job_id: str) -> str:
+    headers = event.get("headers") or {}
+    host = headers.get("Host") or headers.get("host")
+    stage = (event.get("requestContext") or {}).get("stage")
+    if host and stage:
+        return f"https://{host}/{stage}/status/{job_id}"
+    return f"/status/{job_id}"
+
+
+def _job_status_response(
+    event: dict[str, Any],
+    job_id: str,
+    job_record: dict[str, Any],
+    *,
+    status_code: int = 202,
+    message: str = "Analysis queued",
+) -> dict[str, Any]:
+    return api_response(
+        status_code,
+        {
+            "job_id": job_id,
+            "status": job_record.get("status", "queued"),
+            "filename": job_record.get("filename"),
+            "status_url": _build_status_url(event, job_id),
+            "message": message,
+        },
+        event=event,
+    )
+
+
+def _refresh_job_record(job_id: str) -> dict[str, Any]:
+    return _get_job_record(job_id)
+
+
+class S3LocationError(Exception):
+    """Raised when S3 location cannot be resolved from the request."""
+
+
+def _stored_s3_location(job_record: dict[str, Any]) -> tuple[str, str]:
+    stored_bucket = str(job_record.get("s3_bucket") or "")
+    stored_key = str(job_record.get("s3_key") or "")
+    if not stored_bucket or not stored_key:
+        raise S3LocationError("Job record is missing its upload location")
+    return stored_bucket, stored_key
+
+
+def _requested_s3_location(request: dict[str, Any]) -> tuple[str, str] | None:
+    if request.get("s3_url"):
+        return _parse_s3_url(str(request["s3_url"]))
+
+    if not (request.get("s3_bucket") or request.get("s3_key")):
+        return None
+
+    requested_bucket = str(request.get("s3_bucket") or "")
+    requested_key = str(request.get("s3_key") or "")
+    if not requested_bucket or not requested_key:
+        raise S3LocationError("Provide both 's3_bucket' and 's3_key'")
+    return requested_bucket, requested_key
+
+
+def _validate_stored_s3_location(job_id: str, bucket: str, key: str) -> None:
+    if RESUME_BUCKET and bucket != RESUME_BUCKET:
+        raise S3LocationError("Job is associated with an unexpected bucket")
+
+    expected_prefix = f"uploads/{job_id}/"
+    if not key.startswith(expected_prefix):
+        raise S3LocationError("Job upload key has an unexpected prefix")
+
+
+def _validate_s3_location(
+    request: dict[str, Any],
+    job_id: str,
+    job_record: dict[str, Any],
+) -> tuple[str, str]:
+    if not job_record:
+        raise S3LocationError("Job not found")
+
+    stored_bucket, stored_key = _stored_s3_location(job_record)
+    requested_location = _requested_s3_location(request)
+
+    if requested_location and requested_location != (stored_bucket, stored_key):
+        raise S3LocationError("Requested S3 location does not match the job record")
+
+    _validate_stored_s3_location(job_id, stored_bucket, stored_key)
+    return stored_bucket, stored_key
+
+
+def _parse_worker_event(event: dict[str, Any]) -> str | None:
+    if event.get("source") == INTERNAL_WORKER_SOURCE and isinstance(event.get("job_id"), str):
+        return str(event["job_id"])
+    return None
+
+
+def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
+    job_id = str(event["job_id"])
+    job_record = _get_job_record(job_id)
+    if not job_record:
+        logger.warning("Worker invoked for a missing job")
+        return {"status": "missing"}
+
+    if not _claim_job_for_processing(job_id):
+        logger.info("Worker skipped a job because it was not queued")
+        return {"status": "skipped"}
+
+    try:
+        bucket, key = _validate_s3_location({}, job_id, job_record)
+        _ensure_pdf_object_ready(bucket, key)
+        pdf_bytes = _download_pdf_bytes(bucket, key)
+        analysis = analyze_resume_pdf(pdf_bytes, _resolve_job_description({}, job_record))
+        _set_job_completed(job_id, analysis)
+        return {"status": "completed"}
+    except UploadNotReadyError as exc:
+        _set_job_failed(job_id, str(exc))
+        return {"status": "failed", "error": str(exc)}
+    except ValueError as exc:
+        _set_job_failed(job_id, str(exc))
+        return {"status": "failed", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        _handle_analysis_error(job_id, exc)
+        return {"status": "failed", "error": str(exc)}
+
+
+def _queue_analysis_request(
+    event: dict[str, Any],
+    request: dict[str, Any],
+    job_id: str,
+    job_record: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        _validate_s3_location(request, job_id, job_record)
+    except S3LocationError as exc:
+        status_code = 404 if str(exc) == "Job not found" else 400
+        return api_response(status_code, {"error": str(exc)}, event=event)
+    except ValueError as exc:
+        return api_response(400, {"error": str(exc)}, event=event)
+
+    status = str(job_record.get("status", ""))
+    if status == "completed":
+        return _job_status_response(
+            event,
+            job_id,
+            job_record,
+            status_code=200,
+            message="Analysis already completed",
+        )
+    if status in {"queued", "processing"}:
+        return _job_status_response(
+            event,
+            job_id,
+            job_record,
+            status_code=202,
+            message="Analysis already queued",
+        )
+
+    queued = _mark_job_queued(job_id)
+    refreshed = _refresh_job_record(job_id) or {**job_record, "status": "queued"}
+    if queued:
+        _invoke_worker(job_id)
+        refreshed["status"] = "queued"
+
+    return _job_status_response(
+        event,
+        job_id,
+        refreshed,
+        status_code=202,
+        message="Analysis queued" if queued else "Analysis already queued",
+    )
+
+
+def _validate_analyze_request(request: dict[str, Any]) -> str | None:
+    job_id = request.get("job_id")
+    if not isinstance(job_id, str) or not job_id.strip():
+        return "job_id is required"
+    if (
+        "job_description" in request
+        and len(str(request["job_description"])) > MAX_JOB_DESCRIPTION_LENGTH
+    ):
+        return f"job_description exceeds maximum length of {MAX_JOB_DESCRIPTION_LENGTH} characters"
+    return None
 
 
 def _get_job_record(job_id: str) -> dict[str, Any]:
@@ -372,7 +635,7 @@ def _get_job_record(job_id: str) -> dict[str, Any]:
         item = table.get_item(Key={"job_id": job_id}).get("Item")
         return item if isinstance(item, dict) else {}
     except Exception:
-        logger.exception("Failed to read DynamoDB record for job_id=%s", job_id)
+        logger.exception("Failed to read DynamoDB job record")
         return {}
 
 
@@ -383,7 +646,7 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
     try:
         body: Any = event.get("body", "")
         if event.get("isBase64Encoded", False):
-            body = base64.b64decode(body).decode("utf-8")
+            body = base64.b64decode(body, validate=True).decode("utf-8")
 
         if isinstance(body, str):
             body = json.loads(body)
@@ -392,28 +655,10 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
             return None, "Invalid JSON body"
 
         return body, None
+    except (binascii.Error, UnicodeDecodeError):
+        return None, "Invalid base64-encoded body"
     except json.JSONDecodeError:
         return None, "Invalid JSON format"
-
-
-class S3LocationError(Exception):
-    """Raised when S3 location cannot be resolved from the request."""
-
-
-def _get_s3_location(request: dict[str, Any], job_record: dict[str, Any]) -> tuple[str, str]:
-    """Extract S3 bucket and key from request or job record."""
-    s3_url = request.get("s3_url")
-    if s3_url:
-        try:
-            return _parse_s3_url(str(s3_url))
-        except ValueError as exc:
-            raise S3LocationError(str(exc)) from exc
-
-    bucket = str(request.get("s3_bucket") or job_record.get("s3_bucket") or RESUME_BUCKET or "")
-    key = str(request.get("s3_key") or job_record.get("s3_key") or "")
-    if not bucket or not key:
-        raise S3LocationError("Provide 's3_url' or both 's3_bucket' and 's3_key'")
-    return bucket, key
 
 
 def _is_retryable_upstream_error(exc: Exception) -> bool:
@@ -465,7 +710,7 @@ def _handle_analysis_error(
         code = exc.response.get("Error", {}).get("Code", "Unknown")
         message = f"S3 access error: {code}"
         if job_id:
-            _update_job_status(job_id, "failed", error=message)
+            _set_job_failed(job_id, message)
         return api_response(500, {"error": message}, event=event)
 
     if _is_retryable_upstream_error(exc):
@@ -474,36 +719,13 @@ def _handle_analysis_error(
             "Please try again in a few minutes."
         )
         if job_id:
-            _update_job_status(job_id, "failed", error=message)
+            _set_job_failed(job_id, message)
         return api_response(503, {"error": message, "type": "ServiceUnavailable"}, event=event)
 
     logger.exception("Analysis handler failed")
     if job_id:
-        _update_job_status(job_id, "failed", error=str(exc))
+        _set_job_failed(job_id, str(exc))
     return api_response(500, {"error": "Internal server error"}, event=event)
-
-
-def _get_existing_analysis_response(
-    job_id: str | None,
-    job_record: dict[str, Any],
-    event: dict[str, Any],
-) -> dict[str, Any] | None:
-    existing_status = str(job_record.get("status", ""))
-    if existing_status == "completed" and job_record.get("analysis_result") is not None:
-        return api_response(
-            200,
-            {
-                "job_id": job_id,
-                "s3_bucket": job_record.get("s3_bucket"),
-                "s3_key": job_record.get("s3_key"),
-                "analysis_result": normalize_analysis_result(job_record.get("analysis_result")),
-                "message": "Analysis already completed",
-            },
-            event=event,
-        )
-    if existing_status == "processing":
-        return api_response(409, {"error": "Analysis is already in progress"}, event=event)
-    return None
 
 
 def _resolve_job_description(request: dict[str, Any], job_record: dict[str, Any]) -> str:
@@ -514,55 +736,12 @@ def _resolve_job_description(request: dict[str, Any], job_record: dict[str, Any]
     return "General resume analysis"
 
 
-def _execute_analysis_request(
-    event: dict[str, Any],
-    request: dict[str, Any],
-    job_id: str | None,
-    job_record: dict[str, Any],
-    job_description: str,
-) -> dict[str, Any]:
-    try:
-        bucket, key = _get_s3_location(request, job_record)
-
-        _ensure_pdf_object_ready(bucket, key)
-
-        if job_id:
-            _update_job_status(job_id, "processing")
-
-        pdf_bytes = _download_pdf_bytes(bucket, key)
-        analysis = analyze_resume_pdf(pdf_bytes, job_description)
-
-        if job_id:
-            _update_job_status(job_id, "completed", analysis_result=analysis)
-
-        return api_response(
-            200,
-            {
-                "job_id": job_id,
-                "s3_bucket": bucket,
-                "s3_key": key,
-                "analysis_result": analysis,
-            },
-            event=event,
-        )
-    except S3LocationError as exc:
-        return api_response(400, {"error": str(exc)}, event=event)
-    except UploadNotReadyError as exc:
-        return api_response(409, {"error": str(exc)}, event=event)
-    except ValueError as exc:
-        if job_id:
-            _update_job_status(job_id, "failed", error=str(exc))
-        return api_response(400, {"error": str(exc)}, event=event)
-    except Exception as exc:  # noqa: BLE001
-        return _handle_analysis_error(job_id, exc, event=event)
-
-
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Lambda handler for resume analysis.
+    """Lambda handler for queuing and executing resume analysis."""
+    worker_job_id = _parse_worker_event(event)
+    if worker_job_id:
+        return _handle_worker_event(event)
 
-    Analyzes a resume PDF against a job description using Gemini AI.
-    Accepts either an S3 URL or bucket/key combination.
-    """
     request, error = _extract_request(event)
     if error:
         return api_response(400, {"error": error}, event=event)
@@ -570,12 +749,10 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     if request is None:
         return api_response(400, {"error": "No body in request"}, event=event)
 
-    job_id = request.get("job_id")
-    job_record = _get_job_record(str(job_id)) if job_id else {}
-    job_description = _resolve_job_description(request, job_record)
+    validation_error = _validate_analyze_request(request)
+    if validation_error:
+        return api_response(400, {"error": validation_error}, event=event)
 
-    existing_response = _get_existing_analysis_response(job_id, job_record, event)
-    if existing_response is not None:
-        return existing_response
-
-    return _execute_analysis_request(event, request, job_id, job_record, job_description)
+    job_id = str(request["job_id"]).strip()
+    job_record = _get_job_record(job_id)
+    return _queue_analysis_request(event, request, job_id, job_record)

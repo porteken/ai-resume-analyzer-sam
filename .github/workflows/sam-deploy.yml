@@ -99,6 +99,15 @@ jobs:
       - name: Run Pytest with Coverage
         run: uv run --locked --no-sync --no-build pytest
 
+      - name: Run Ruff
+        run: uv run --locked --no-sync --no-build ruff check .
+
+      - name: Run Pyright
+        run: uv run --locked --no-sync --no-build pyright
+
+      - name: Lint SAM Template
+        run: sam validate --lint --template template.yaml
+
       - name: SonarQube Scan
         if: github.ref == 'refs/heads/dev'
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
@@ -202,18 +211,24 @@ jobs:
 
           ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 
-          if ! MISSING_ACTIONS="$(
+          set +e
+          SIMULATION_OUTPUT="$(
             aws iam simulate-principal-policy \
               --policy-source-arn "$ROLE_ARN" \
               --action-names s3:GetBucketPolicy s3:PutBucketPolicy s3:DeleteBucketPolicy \
               --resource-arns arn:aws:s3:::ai-resume-analyzer* \
               --query "EvaluationResults[?EvalDecision!='allowed'].EvalActionName" \
-              --output text
-          )"; then
-            echo "Unable to simulate IAM permissions for role '$ROLE_NAME'. Continuing deploy."
+              --output text 2>&1
+          )"
+          SIMULATION_STATUS=$?
+          set -e
+
+          if [[ $SIMULATION_STATUS -ne 0 ]]; then
+            echo "::warning::Unable to simulate IAM permissions for role '$ROLE_NAME'. Continuing deploy. Details: $SIMULATION_OUTPUT"
             exit 0
           fi
 
+          MISSING_ACTIONS="$SIMULATION_OUTPUT"
           if [[ -n "${MISSING_ACTIONS// }" && "$MISSING_ACTIONS" != "None" ]]; then
             echo "::error::Missing required S3 bucket-policy permissions for role '$ROLE_NAME': $MISSING_ACTIONS"
             echo "::error::Grant s3:GetBucketPolicy,s3:PutBucketPolicy,s3:DeleteBucketPolicy on arn:aws:s3:::ai-resume-analyzer*"
@@ -320,6 +335,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [[ -z "${GOOGLE_API_KEY_SECRET_ARN:-}" && -z "${GOOGLE_API_KEY:-}" ]]; then
+            echo "::error::Set either GOOGLE_API_KEY_SECRET_ARN or GOOGLE_API_KEY in GitHub secrets."
+            exit 1
+          fi
+
           
           PARAM_OVERRIDES=(
             "ApiStageName=$API_STAGE_NAME"
@@ -330,9 +350,7 @@ jobs:
 
           if [[ -n "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKeySecretArn=$GOOGLE_API_KEY_SECRET_ARN")
-          fi
-          
-          if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+          elif [[ -n "${GOOGLE_API_KEY:-}" ]]; then
             PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
           fi
 

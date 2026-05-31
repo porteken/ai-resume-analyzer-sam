@@ -157,3 +157,8 @@ class TestUploadHandler:
         event = {"body": "[]", "isBase64Encoded": False}
         response = upload_handler_module.lambda_handler(event, mock_lambda_context)
         assert_error_response(response, 400, "Invalid JSON body")
+
+    def test_bad_base64_body(self, upload_handler_module, mock_lambda_context) -> None:
+        event = {"body": "!!!!", "isBase64Encoded": True}
+        response = upload_handler_module.lambda_handler(event, mock_lambda_context)
+        assert_error_response(response, 400, "Invalid base64")

@@ -45,12 +45,16 @@ TEST_ORIGIN = "https://test.example.com"
 def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set up environment variables for all tests."""
     monkeypatch.setenv("GOOGLE_API_KEY", "test-api-key-123")
-    monkeypatch.setenv("GOOGLE_API_KEY_SECRET_ARN", "")
+    monkeypatch.setenv(
+        "GOOGLE_API_KEY_SECRET_ARN",
+        "arn:aws:secretsmanager:us-east-1:123456789012:secret:test",
+    )
     monkeypatch.setenv("GEMINI_MODEL_ID", "gemini-3-flash-preview")
     monkeypatch.setenv("RESUME_BUCKET", "test-resume-bucket")
     monkeypatch.setenv("RESULTS_TABLE", "test-results-table")
     monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "test-analyze-function")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://test.example.com")
 
     from resume_analyzer import utils
@@ -63,6 +67,7 @@ def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 def mock_boto3_clients() -> dict[str, Any]:
     """Mock all boto3 clients and resources."""
     mock_s3_client = MagicMock()
+    mock_lambda_client = MagicMock()
     mock_dynamodb = MagicMock()
 
     mock_s3_client.get_object.return_value = {
@@ -82,6 +87,7 @@ def mock_boto3_clients() -> dict[str, Any]:
             "x-amz-meta-job_id": "test-job-123",
         },
     }
+    mock_lambda_client.invoke.return_value = {"StatusCode": 202}
 
     mock_table = MagicMock()
     mock_table.put_item.return_value = {}
@@ -121,6 +127,7 @@ def mock_boto3_clients() -> dict[str, Any]:
 
     return {
         "s3": mock_s3_client,
+        "lambda": mock_lambda_client,
         "dynamodb": mock_dynamodb,
         "dynamodb_table": mock_table,
     }

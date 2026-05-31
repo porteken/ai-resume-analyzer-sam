@@ -8,12 +8,12 @@ Parameters:
     Type: String
     Default: ""
     NoEcho: true
-    Description: Optional Google Gemini API key fallback when Secrets Manager is not used.
+    Description: Optional Google Gemini API key fallback when Secrets Manager is not used. Prefer GoogleApiKeySecretArn for production deployments.
 
   GoogleApiKeySecretArn:
     Type: String
     Default: ""
-    Description: Optional Secrets Manager secret ARN containing the Google Gemini API key.
+    Description: Secrets Manager secret ARN containing the Google Gemini API key.
 
   ApiStageName:
     Type: String
@@ -49,7 +49,6 @@ Conditions:
   UseS3AccessLogging: !Equals [!Ref EnableS3AccessLogging, "true"]
   UseAccessLogsAuditBucket: !Not [!Equals [!Ref AccessLogsAuditBucketName, ""]]
   UseGoogleApiKeySecretArn: !Not [!Equals [!Ref GoogleApiKeySecretArn, ""]]
-
 Globals:
   Function:
     Runtime: python3.12
@@ -166,7 +165,9 @@ Resources:
               - POST
               - GET
             AllowedHeaders:
-              - "*"
+              - Content-Type
+              - x-amz-meta-job_id
+              - x-amz-meta-filename
             ExposedHeaders:
               - ETag
             MaxAge: 300
@@ -243,7 +244,6 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:PutItem
-                - dynamodb:UpdateItem
               Resource: !GetAtt ResultsTable.Arn
 
       Environment:
@@ -271,9 +271,12 @@ Resources:
             - Effect: Allow
               Action:
                 - dynamodb:GetItem
-                - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt ResultsTable.Arn
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-AnalyzeFunction
         - !If
           - UseGoogleApiKeySecretArn
           - Statement:
@@ -285,12 +288,13 @@ Resources:
 
       Environment:
         Variables:
-          GOOGLE_API_KEY: !Ref GoogleApiKey
+          GOOGLE_API_KEY: !If [UseGoogleApiKeySecretArn, "", !Ref GoogleApiKey]
           GOOGLE_API_KEY_SECRET_ARN: !Ref GoogleApiKeySecretArn
           GEMINI_MODEL_ID: gemini-3-flash-preview
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          ANALYZE_FUNCTION_NAME: !Sub '${AWS::StackName}-AnalyzeFunction'
 
   StatusFunction:
     Type: AWS::Serverless::Function
@@ -315,7 +319,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !Ref PresignedUploadFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/*/*/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/${ApiStageName}/POST/upload
 
   AnalyzeInvokePermissionForApiGateway:
     Type: AWS::Lambda::Permission
@@ -323,7 +327,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !Ref AnalyzeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/*/*/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/${ApiStageName}/POST/analyze
 
   StatusInvokePermissionForApiGateway:
     Type: AWS::Lambda::Permission
@@ -331,7 +335,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !Ref StatusFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/*/*/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExistingApiId}/${ApiStageName}/GET/status/*
 
   PresignedUploadFunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -356,6 +360,109 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${StatusFunction}
       RetentionInDays: 5
+
+  AnalyzeGeminiFailureMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref AnalyzeFunctionLogGroup
+      FilterPattern: '"Analysis service is temporarily unavailable"'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${AWS::StackName}/ResumeAnalyzer'
+          MetricName: GeminiFailures
+          MetricValue: '1'
+
+  PresignedUploadErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Presigned upload Lambda is returning errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PresignedUploadFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  AnalyzeErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Analyze Lambda is returning errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AnalyzeFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  AnalyzeThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Analyze Lambda is being throttled.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AnalyzeFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  AnalyzeDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Analyze Lambda duration is close to timeout.
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AnalyzeFunction
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  StatusErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Status Lambda is returning errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref StatusFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  GeminiFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Gemini analysis failures were detected in AnalyzeFunction logs.
+      Namespace: !Sub '${AWS::StackName}/ResumeAnalyzer'
+      MetricName: GeminiFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
 
 Outputs:
   ResumeBucketName:

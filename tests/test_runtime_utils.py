@@ -46,3 +46,23 @@ class TestRuntimeUtils:
         config = client_factory.call_args.kwargs["config"]
         assert config.tcp_keepalive is True
         assert config.retries == {"max_attempts": 3, "mode": "standard"}
+
+    def test_get_lambda_client_uses_keepalive_and_standard_retries(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from resume_analyzer import utils
+
+        mock_client = MagicMock(name="lambda-client")
+        client_factory = MagicMock(return_value=mock_client)
+        monkeypatch.setattr(utils.boto3, "client", client_factory)
+        utils.reset_cached_clients()
+
+        result = utils.get_lambda_client()
+
+        assert result is mock_client
+        client_factory.assert_called_once()
+        assert client_factory.call_args.args == ("lambda",)
+        config = client_factory.call_args.kwargs["config"]
+        assert config.tcp_keepalive is True
+        assert config.retries == {"max_attempts": 3, "mode": "standard"}
