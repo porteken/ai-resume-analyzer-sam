@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import logging
 import os
@@ -60,7 +61,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return api_response(400, {"error": "No body in request"}, event=event)
 
         if event.get("isBase64Encoded", False):
-            body = base64.b64decode(body).decode("utf-8")
+            body = base64.b64decode(body, validate=True).decode("utf-8")
         if isinstance(body, str):
             body = json.loads(body)
 
@@ -124,6 +125,8 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             },
             event=event,
         )
+    except (binascii.Error, UnicodeDecodeError):
+        return api_response(400, {"error": "Invalid base64-encoded body"}, event=event)
     except json.JSONDecodeError:
         return api_response(400, {"error": "Invalid JSON format"}, event=event)
     except (TypeError, ValueError) as exc:

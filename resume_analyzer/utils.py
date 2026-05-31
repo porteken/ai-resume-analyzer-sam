@@ -18,6 +18,7 @@ CORS_ALLOWED_ORIGINS: set[str] = {o.strip().rstrip("/") for o in _cors_raw.split
 
 dynamodb: Any | None = None
 s3_client: Any | None = None
+lambda_client: Any | None = None
 _results_table: Any | None = None
 
 _BOTO_CLIENT_CONFIG = Config(
@@ -42,11 +43,20 @@ def get_s3_client() -> Any:
     return s3_client
 
 
+def get_lambda_client() -> Any:
+    """Lazily initialise and return the Lambda client."""
+    global lambda_client  # noqa: PLW0603
+    if lambda_client is None:
+        lambda_client = boto3.client("lambda", config=_BOTO_CLIENT_CONFIG)
+    return lambda_client
+
+
 def reset_cached_clients() -> None:
     """Reset cached boto3 clients and table references used by tests."""
-    global dynamodb, s3_client, _results_table  # noqa: PLW0603
+    global dynamodb, s3_client, lambda_client, _results_table  # noqa: PLW0603
     dynamodb = None
     s3_client = None
+    lambda_client = None
     _results_table = None
 
 

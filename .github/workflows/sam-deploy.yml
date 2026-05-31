@@ -99,6 +99,15 @@ jobs:
       - name: Run Pytest with Coverage
         run: uv run --locked --no-sync --no-build pytest
 
+      - name: Run Ruff
+        run: uv run --locked --no-sync --no-build ruff check .
+
+      - name: Run Pyright
+        run: uv run --locked --no-sync --no-build pyright
+
+      - name: Lint SAM Template
+        run: sam validate --lint --template template.yaml
+
       - name: SonarQube Scan
         if: github.ref == 'refs/heads/dev'
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
@@ -314,11 +323,15 @@ jobs:
 
       - name: Deploy SAM Application
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_API_KEY_SECRET_ARN: ${{ secrets.GOOGLE_API_KEY_SECRET_ARN }}
           SAM_CLI_TELEMETRY: "0"
         run: |
           set -euo pipefail
+
+          if [[ -z "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
+            echo "::error::GOOGLE_API_KEY_SECRET_ARN must point to the Secrets Manager API key secret."
+            exit 1
+          fi
 
           
           PARAM_OVERRIDES=(
@@ -326,15 +339,8 @@ jobs:
             "ExistingApiId=$SHARED_REST_API_ID"
             "AllowedOrigins=$ALLOWED_ORIGINS"
             "EnableS3AccessLogging=$ENABLE_S3_ACCESS_LOGGING"
+            "GoogleApiKeySecretArn=$GOOGLE_API_KEY_SECRET_ARN"
           )
-
-          if [[ -n "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
-            PARAM_OVERRIDES+=("GoogleApiKeySecretArn=$GOOGLE_API_KEY_SECRET_ARN")
-          fi
-          
-          if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
-            PARAM_OVERRIDES+=("GoogleApiKey=$GOOGLE_API_KEY")
-          fi
 
           
           set +e

@@ -19,6 +19,8 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     original_account_id = lambda_function.ACCOUNT_ID
     original_get_results_table = lambda_function.get_results_table
     original_get_s3_client = lambda_function.get_s3_client
+    original_get_lambda_client = lambda_function.get_lambda_client
+    original_get_secrets_client = lambda_function._get_secrets_client
     original_client_class = lambda_function.Client
     original_types = lambda_function.types
     original_genai_client = lambda_function._genai_client
@@ -38,8 +40,14 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     }
 
     lambda_function.get_s3_client = lambda: mock_boto3_clients["s3"]
+    lambda_function.get_lambda_client = lambda: mock_boto3_clients["lambda"]
     lambda_function.ACCOUNT_ID = "123456789012"
     lambda_function.get_results_table = lambda: mock_boto3_clients["dynamodb_table"]
+    mock_secrets_client = MagicMock()
+    mock_secrets_client.get_secret_value.return_value = {
+        "SecretString": json.dumps({"GOOGLE_API_KEY": "test-api-key-123"})
+    }
+    lambda_function._get_secrets_client = lambda: mock_secrets_client
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -84,6 +92,8 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
         lambda_function.ACCOUNT_ID = original_account_id
         lambda_function.get_results_table = original_get_results_table
         lambda_function.get_s3_client = original_get_s3_client
+        lambda_function.get_lambda_client = original_get_lambda_client
+        lambda_function._get_secrets_client = original_get_secrets_client
         lambda_function.Client = original_client_class
         lambda_function.types = original_types
         lambda_function._genai_client = original_genai_client
@@ -121,13 +131,26 @@ class TestGeminiAnalysis:
     def test_analyze_pdf_returns_structured_json(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
     ) -> None:
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+                "job_description": "Python developer position",
+            }
+        }
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
 
-        body = assert_success_response(response, 200, required_fields=["analysis_result", "s3_key"])
-        analysis = body["analysis_result"]
+        assert response["status"] == "completed"
+        completed_call = mock_boto3_clients["dynamodb_table"].update_item.call_args_list[-1]
+        analysis = completed_call[1]["ExpressionAttributeValues"][":result"]
 
         assert analysis["name"] == "Jane Doe"
         assert "skills" in analysis
@@ -155,9 +178,18 @@ class TestGeminiAnalysis:
     def test_analyze_backfills_missing_strengths_gaps_and_recommendations(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+                "job_description": "Python developer position",
+            }
+        }
         lambda_function_module._get_genai_client().models.generate_content.return_value.text = (
             json.dumps(
                 {
@@ -175,9 +207,13 @@ class TestGeminiAnalysis:
             )
         )
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        body = assert_success_response(response, 200, required_fields=["analysis_result"])
-        analysis = body["analysis_result"]
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
+        assert response["status"] == "completed"
+        completed_call = mock_boto3_clients["dynamodb_table"].update_item.call_args_list[-1]
+        analysis = completed_call[1]["ExpressionAttributeValues"][":result"]
 
         assert analysis["education"] == []
         assert analysis["strengths"] == []
@@ -187,38 +223,173 @@ class TestGeminiAnalysis:
     def test_analyze_requires_s3_location(
         self, lambda_function_module: Any, mock_lambda_context: Any
     ) -> None:
+        event = {"body": json.dumps({"job_description": "Python dev"}), "isBase64Encoded": False}
+
+        response = lambda_function_module.lambda_handler(event, mock_lambda_context)
+        assert_error_response(response, 400, "job_id is required")
+
+    def test_queue_analyze_returns_accepted_and_invokes_worker(
+        self,
+        lambda_function_module: Any,
+        sample_analyze_event: dict[str, Any],
+        mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
+    ) -> None:
+        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+
+        body = assert_success_response(response, 202, required_fields=["job_id", "status_url"])
+        assert body["status"] == "queued"
+        assert "analysis_result" not in body
+        mock_boto3_clients["lambda"].invoke.assert_called_once()
+        invoke_args = mock_boto3_clients["lambda"].invoke.call_args[1]
+        assert invoke_args["InvocationType"] == "Event"
+
+    def test_duplicate_analyze_conditional_race_does_not_invoke_worker(
+        self,
+        lambda_function_module: Any,
+        sample_analyze_event: dict[str, Any],
+        mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
+    ) -> None:
+        mock_boto3_clients["dynamodb_table"].update_item.side_effect = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException"}},
+            "UpdateItem",
+        )
+
+        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+
+        body = assert_success_response(response, 202, required_fields=["job_id", "status_url"])
+        assert body["message"] == "Analysis already queued"
+        mock_boto3_clients["lambda"].invoke.assert_not_called()
+
+    def test_rejects_mismatched_job_s3_key(
+        self,
+        lambda_function_module: Any,
+        mock_lambda_context: Any,
+    ) -> None:
         event = {
-            "body": json.dumps({"job_description": "Python dev"}),
+            "body": json.dumps(
+                {
+                    "job_id": "test-job-123",
+                    "s3_url": "s3://test-resume-bucket/uploads/other-job/test-resume.pdf",
+                }
+            ),
             "isBase64Encoded": False,
         }
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-        assert_error_response(response, 400, "Provide 's3_url'")
+        assert_error_response(response, 400, "does not match")
+
+    def test_rejects_wrong_bucket_in_job_record(
+        self,
+        lambda_function_module: Any,
+        mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
+    ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "upload_pending",
+                "s3_bucket": "other-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
+        event = {"body": '{"job_id": "test-job-123"}', "isBase64Encoded": False}
+
+        response = lambda_function_module.lambda_handler(event, mock_lambda_context)
+        assert_error_response(response, 400, "unexpected bucket")
+
+    def test_rejects_missing_job_record(
+        self,
+        lambda_function_module: Any,
+        mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
+    ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {}
+
+        response = lambda_function_module.lambda_handler(
+            {"body": '{"job_id": "missing-job"}', "isBase64Encoded": False},
+            mock_lambda_context,
+        )
+        assert_error_response(response, 404, "Job not found")
+
+    def test_rejects_oversized_job_description(
+        self,
+        lambda_function_module: Any,
+        mock_lambda_context: Any,
+    ) -> None:
+        event = {
+            "body": json.dumps(
+                {
+                    "job_id": "test-job-123",
+                    "job_description": "x"
+                    * (lambda_function_module.MAX_JOB_DESCRIPTION_LENGTH + 1),
+                }
+            ),
+            "isBase64Encoded": False,
+        }
+
+        response = lambda_function_module.lambda_handler(event, mock_lambda_context)
+        assert_error_response(response, 400, "job_description exceeds")
+
+    def test_rejects_bad_base64_body(
+        self,
+        lambda_function_module: Any,
+        mock_lambda_context: Any,
+    ) -> None:
+        response = lambda_function_module.lambda_handler(
+            {"body": "!!!!", "isBase64Encoded": True},
+            mock_lambda_context,
+        )
+        assert_error_response(response, 400, "Invalid base64")
 
     def test_analyze_handles_non_json_gemini_output(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         lambda_function_module._get_genai_client().models.generate_content.return_value.text = (
             "not json"
         )
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        assert_error_response(response, 500)
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
+        assert response["status"] == "failed"
 
     def test_analyze_handles_s3_client_error(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         error = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         lambda_function_module.get_s3_client().get_object.side_effect = error
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        assert_error_response(response, 500, "S3 access error")
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
+        assert response["status"] == "failed"
+        assert "NoSuchKey" in response["error"]
 
     def test_parse_s3_url_variants(self, lambda_function_module: Any) -> None:
         bucket, key = lambda_function_module._parse_s3_url(
@@ -284,10 +455,18 @@ class TestGeminiAnalysis:
     def test_analyze_retries_service_unavailable(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         sleep_calls: list[float] = []
         monkeypatch.setattr(
             lambda_function_module.time,
@@ -302,19 +481,30 @@ class TestGeminiAnalysis:
             mock_client.models.generate_content.return_value,
         ]
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
 
-        assert_success_response(response, 200, required_fields=["analysis_result"])
+        assert response["status"] == "completed"
         assert sleep_calls == [1.0, 2.0]
         assert mock_client.models.generate_content.call_count == 3
 
     def test_analyze_retries_rate_limit_errors(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         sleep_calls: list[float] = []
         monkeypatch.setattr(
             lambda_function_module.time,
@@ -328,9 +518,12 @@ class TestGeminiAnalysis:
             mock_client.models.generate_content.return_value,
         ]
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
 
-        assert_success_response(response, 200, required_fields=["analysis_result"])
+        assert response["status"] == "completed"
         assert sleep_calls == [1.0]
         assert mock_client.models.generate_content.call_count == 2
 
@@ -464,14 +657,22 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         mock_boto3_clients["dynamodb_table"].get_item.return_value = {
-            "Item": {"job_id": "job-123", "job_description": "From DB"}
+            "Item": {
+                "job_id": "job-123",
+                "status": "upload_pending",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/job-123/test-resume.pdf",
+                "job_description": "From DB",
+            }
         }
         event = {
-            "body": '{"job_id": "job-123", "s3_url": "s3://bucket/key.pdf"}',
+            "body": '{"job_id": "job-123", "s3_url": "s3://test-resume-bucket/uploads/job-123/test-resume.pdf"}',
             "isBase64Encoded": False,
         }
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-        assert response["statusCode"] == 200
+        body = assert_success_response(response, 202, required_fields=["job_id", "status_url"])
+        assert body["status"] == "queued"
+        mock_boto3_clients["lambda"].invoke.assert_called_once()
 
     def test_returns_cached_analysis_when_job_already_completed(
         self,
@@ -491,11 +692,10 @@ class TestGeminiAnalysis:
         event = {"body": '{"job_id": "test-job-123"}', "isBase64Encoded": False}
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-        body = assert_success_response(
-            response, 200, required_fields=["analysis_result", "message"]
-        )
+        body = assert_success_response(response, 200, required_fields=["status_url", "message"])
 
         assert body["message"] == "Analysis already completed"
+        assert "analysis_result" not in body
         lambda_function_module.get_s3_client().get_object.assert_not_called()
         lambda_function_module._get_genai_client().models.generate_content.assert_not_called()
 
@@ -506,35 +706,64 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         mock_boto3_clients["dynamodb_table"].get_item.return_value = {
-            "Item": {"job_id": "test-job-123", "status": "processing"}
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "processing",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
         }
         event = {"body": '{"job_id": "test-job-123"}', "isBase64Encoded": False}
 
         response = lambda_function_module.lambda_handler(event, mock_lambda_context)
-        assert_error_response(response, 409, "already in progress")
+        body = assert_success_response(response, 202, required_fields=["status_url"])
+        assert body["message"] == "Analysis already queued"
+        mock_boto3_clients["lambda"].invoke.assert_not_called()
 
     def test_rejects_analysis_when_upload_not_ready(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
+        mock_boto3_clients: dict[str, Any],
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         lambda_function_module.get_s3_client().head_object.side_effect = ClientError(
             {"Error": {"Code": "404"}},
             "HeadObject",
         )
 
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        assert_error_response(response, 409, "finish the upload")
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
+        assert response["status"] == "failed"
+        assert "finish the upload" in response["error"]
 
     def test_status_update_processing(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
         mock_boto3_clients: dict[str, Any],
     ) -> None:
-        lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
+        lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
         calls = mock_boto3_clients["dynamodb_table"].update_item.call_args_list
         statuses = [c[1]["ExpressionAttributeValues"][":status"] for c in calls]
         assert "processing" in statuses
@@ -543,17 +772,27 @@ class TestGeminiAnalysis:
     def test_status_update_failed_on_s3_error(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         from botocore.exceptions import ClientError
 
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         mock_boto3_clients["s3"].get_object.side_effect = ClientError(
             {"Error": {"Code": "AccessDenied"}}, "GetObject"
         )
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        assert_error_response(response, 500)
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
+        assert response["status"] == "failed"
         calls = mock_boto3_clients["dynamodb_table"].update_item.call_args_list
         statuses = [c[1]["ExpressionAttributeValues"][":status"] for c in calls]
         assert "failed" in statuses
@@ -561,13 +800,23 @@ class TestGeminiAnalysis:
     def test_status_update_failed_on_exception(
         self,
         lambda_function_module: Any,
-        sample_analyze_event: dict[str, Any],
         mock_lambda_context: Any,
         mock_boto3_clients: dict[str, Any],
     ) -> None:
+        mock_boto3_clients["dynamodb_table"].get_item.return_value = {
+            "Item": {
+                "job_id": "test-job-123",
+                "status": "queued",
+                "s3_bucket": "test-resume-bucket",
+                "s3_key": "uploads/test-job-123/test-resume.pdf",
+            }
+        }
         mock_boto3_clients["s3"].get_object.side_effect = Exception("Unexpected error")
-        response = lambda_function_module.lambda_handler(sample_analyze_event, mock_lambda_context)
-        assert_error_response(response, 500)
+        response = lambda_function_module.lambda_handler(
+            {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
+            mock_lambda_context,
+        )
+        assert response["status"] == "failed"
         calls = mock_boto3_clients["dynamodb_table"].update_item.call_args_list
         statuses = [c[1]["ExpressionAttributeValues"][":status"] for c in calls]
         assert "failed" in statuses
