@@ -211,18 +211,24 @@ jobs:
 
           ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 
-          if ! MISSING_ACTIONS="$(
+          set +e
+          SIMULATION_OUTPUT="$(
             aws iam simulate-principal-policy \
               --policy-source-arn "$ROLE_ARN" \
               --action-names s3:GetBucketPolicy s3:PutBucketPolicy s3:DeleteBucketPolicy \
               --resource-arns arn:aws:s3:::ai-resume-analyzer* \
               --query "EvaluationResults[?EvalDecision!='allowed'].EvalActionName" \
-              --output text
-          )"; then
-            echo "Unable to simulate IAM permissions for role '$ROLE_NAME'. Continuing deploy."
+              --output text 2>&1
+          )"
+          SIMULATION_STATUS=$?
+          set -e
+
+          if [[ $SIMULATION_STATUS -ne 0 ]]; then
+            echo "::warning::Unable to simulate IAM permissions for role '$ROLE_NAME'. Continuing deploy. Details: $SIMULATION_OUTPUT"
             exit 0
           fi
 
+          MISSING_ACTIONS="$SIMULATION_OUTPUT"
           if [[ -n "${MISSING_ACTIONS// }" && "$MISSING_ACTIONS" != "None" ]]; then
             echo "::error::Missing required S3 bucket-policy permissions for role '$ROLE_NAME': $MISSING_ACTIONS"
             echo "::error::Grant s3:GetBucketPolicy,s3:PutBucketPolicy,s3:DeleteBucketPolicy on arn:aws:s3:::ai-resume-analyzer*"
@@ -323,14 +329,39 @@ jobs:
 
       - name: Deploy SAM Application
         env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_API_KEY_SECRET_ARN: ${{ secrets.GOOGLE_API_KEY_SECRET_ARN }}
           SAM_CLI_TELEMETRY: "0"
         run: |
           set -euo pipefail
 
           if [[ -z "${GOOGLE_API_KEY_SECRET_ARN:-}" ]]; then
-            echo "::error::GOOGLE_API_KEY_SECRET_ARN must point to the Secrets Manager API key secret."
-            exit 1
+            if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+              echo "::error::Set either GOOGLE_API_KEY_SECRET_ARN or GOOGLE_API_KEY in GitHub secrets."
+              exit 1
+            fi
+
+            SECRET_NAME="${SAM_STACK_NAME}/google-api-key"
+            if SECRET_ARN="$(
+              aws secretsmanager describe-secret \
+                --secret-id "$SECRET_NAME" \
+                --query ARN \
+                --output text 2>/dev/null
+            )"; then
+              aws secretsmanager put-secret-value \
+                --secret-id "$SECRET_NAME" \
+                --secret-string "$GOOGLE_API_KEY" >/dev/null
+            else
+              SECRET_ARN="$(
+                aws secretsmanager create-secret \
+                  --name "$SECRET_NAME" \
+                  --description "Google Gemini API key for ${SAM_STACK_NAME}" \
+                  --secret-string "$GOOGLE_API_KEY" \
+                  --query ARN \
+                  --output text
+              )"
+            fi
+            GOOGLE_API_KEY_SECRET_ARN="$SECRET_ARN"
           fi
 
           
