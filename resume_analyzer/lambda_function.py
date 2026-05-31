@@ -387,8 +387,8 @@ def _update_job_status(
         table.update_item(**kwargs)
     except Exception as exc:
         if _conditional_check_failed(exc):
-            raise JobTransitionError(f"Job {job_id} is not in an expected state") from exc
-        logger.exception("Failed to update DynamoDB status for job_id=%s", job_id)
+            raise JobTransitionError("Job is not in an expected state") from exc
+        logger.exception("Failed to update DynamoDB status")
 
 
 def _mark_job_queued(job_id: str) -> bool:
@@ -411,7 +411,7 @@ def _set_job_failed(job_id: str | None, error: str) -> None:
     try:
         _update_job_status(job_id, "failed", error=error)
     except JobTransitionError:
-        logger.info("Skipping failed status update because job_id=%s no longer exists", job_id)
+        logger.info("Skipping failed status update because the job no longer exists")
 
 
 def _set_job_completed(job_id: str, analysis_result: dict[str, Any]) -> None:
@@ -423,9 +423,7 @@ def _set_job_completed(job_id: str, analysis_result: dict[str, Any]) -> None:
             expected_statuses={"processing"},
         )
     except JobTransitionError:
-        logger.warning(
-            "Skipping completed status update because job_id=%s was not processing", job_id
-        )
+        logger.warning("Skipping completed status update because the job was not processing")
 
 
 def _invoke_worker(job_id: str) -> None:
@@ -480,6 +478,37 @@ class S3LocationError(Exception):
     """Raised when S3 location cannot be resolved from the request."""
 
 
+def _stored_s3_location(job_record: dict[str, Any]) -> tuple[str, str]:
+    stored_bucket = str(job_record.get("s3_bucket") or "")
+    stored_key = str(job_record.get("s3_key") or "")
+    if not stored_bucket or not stored_key:
+        raise S3LocationError("Job record is missing its upload location")
+    return stored_bucket, stored_key
+
+
+def _requested_s3_location(request: dict[str, Any]) -> tuple[str, str] | None:
+    if request.get("s3_url"):
+        return _parse_s3_url(str(request["s3_url"]))
+
+    if not (request.get("s3_bucket") or request.get("s3_key")):
+        return None
+
+    requested_bucket = str(request.get("s3_bucket") or "")
+    requested_key = str(request.get("s3_key") or "")
+    if not requested_bucket or not requested_key:
+        raise S3LocationError("Provide both 's3_bucket' and 's3_key'")
+    return requested_bucket, requested_key
+
+
+def _validate_stored_s3_location(job_id: str, bucket: str, key: str) -> None:
+    if RESUME_BUCKET and bucket != RESUME_BUCKET:
+        raise S3LocationError("Job is associated with an unexpected bucket")
+
+    expected_prefix = f"uploads/{job_id}/"
+    if not key.startswith(expected_prefix):
+        raise S3LocationError("Job upload key has an unexpected prefix")
+
+
 def _validate_s3_location(
     request: dict[str, Any],
     job_id: str,
@@ -488,34 +517,13 @@ def _validate_s3_location(
     if not job_record:
         raise S3LocationError("Job not found")
 
-    stored_bucket = str(job_record.get("s3_bucket") or "")
-    stored_key = str(job_record.get("s3_key") or "")
-    if not stored_bucket or not stored_key:
-        raise S3LocationError("Job record is missing its upload location")
+    stored_bucket, stored_key = _stored_s3_location(job_record)
+    requested_location = _requested_s3_location(request)
 
-    requested_bucket: str | None = None
-    requested_key: str | None = None
-    if request.get("s3_url"):
-        requested_bucket, requested_key = _parse_s3_url(str(request["s3_url"]))
-    elif request.get("s3_bucket") or request.get("s3_key"):
-        requested_bucket = str(request.get("s3_bucket") or "")
-        requested_key = str(request.get("s3_key") or "")
-        if not requested_bucket or not requested_key:
-            raise S3LocationError("Provide both 's3_bucket' and 's3_key'")
-
-    if requested_bucket is not None and (requested_bucket, requested_key) != (
-        stored_bucket,
-        stored_key,
-    ):
+    if requested_location and requested_location != (stored_bucket, stored_key):
         raise S3LocationError("Requested S3 location does not match the job record")
 
-    if RESUME_BUCKET and stored_bucket != RESUME_BUCKET:
-        raise S3LocationError("Job is associated with an unexpected bucket")
-
-    expected_prefix = f"uploads/{job_id}/"
-    if not stored_key.startswith(expected_prefix):
-        raise S3LocationError("Job upload key has an unexpected prefix")
-
+    _validate_stored_s3_location(job_id, stored_bucket, stored_key)
     return stored_bucket, stored_key
 
 
@@ -529,11 +537,11 @@ def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
     job_id = str(event["job_id"])
     job_record = _get_job_record(job_id)
     if not job_record:
-        logger.warning("Worker invoked for missing job_id=%s", job_id)
+        logger.warning("Worker invoked for a missing job")
         return {"status": "missing"}
 
     if not _claim_job_for_processing(job_id):
-        logger.info("Worker skipped job_id=%s because it was not queued", job_id)
+        logger.info("Worker skipped a job because it was not queued")
         return {"status": "skipped"}
 
     try:
@@ -619,7 +627,7 @@ def _get_job_record(job_id: str) -> dict[str, Any]:
         item = table.get_item(Key={"job_id": job_id}).get("Item")
         return item if isinstance(item, dict) else {}
     except Exception:
-        logger.exception("Failed to read DynamoDB record for job_id=%s", job_id)
+        logger.exception("Failed to read DynamoDB job record")
         return {}
 
 
