@@ -46,15 +46,8 @@ select = ["ALL"]
 ignore = [
     "D203",
     "D213",
-    "E501",
-    "D100",
-    "D104",
-    "D200",
-    "D205",
-    "D401",
     "COM812",
     "ISC001",
-    "TRY300",
     "EM101",
     "EM102",
     "TRY003",
@@ -63,4 +56,4 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "resume_analyzer/upload_handler.py" = ["C901", "PLR0911"]
-"tests/*" = ["S101", "PLR2004", "FBT001", "FBT002", "ANN001", "ANN202", "SLF001", "ARG002", "PLC0415", "D101", "D102", "D105", "D107"]
+"tests/*" = ["S101", "PLR2004", "FBT001", "ANN001", "SLF001", "PLC0415", "D101", "D102", "D107"]

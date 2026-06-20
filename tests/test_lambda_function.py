@@ -583,7 +583,7 @@ class TestGeminiAnalysis:
     def test_update_job_status_no_table(self, lambda_function_module: Any) -> None:
         original = lambda_function_module.get_results_table
 
-        def _no_table():
+        def _no_table() -> None:
             raise RuntimeError("not configured")
 
         lambda_function_module.get_results_table = _no_table
@@ -601,7 +601,7 @@ class TestGeminiAnalysis:
     def test_get_job_record_no_table(self, lambda_function_module: Any) -> None:
         original = lambda_function_module.get_results_table
 
-        def _no_table():
+        def _no_table() -> None:
             raise RuntimeError("not configured")
 
         lambda_function_module.get_results_table = _no_table

@@ -1,3 +1,5 @@
+"""Analyze uploaded resumes and coordinate asynchronous processing jobs."""
+
 import base64
 import binascii
 import http
@@ -291,7 +293,7 @@ def _build_analysis_prompt(job_description: str) -> str:
 
 
 def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]:
-    """Calls Gemini 3 Flash Preview with native PDF input and strict JSON schema output."""
+    """Call Gemini 3 Flash Preview with native PDF input and strict JSON schema output."""
     response_schema = RESUME_ANALYSIS_RESPONSE_SCHEMA
     prompt = _build_analysis_prompt(job_description)
     contents = [
@@ -317,7 +319,8 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
             if _is_retryable_upstream_error(exc) and attempt < MAX_GEMINI_RETRIES - 1:
                 delay = RETRY_BASE_DELAY_SECONDS * (2**attempt)
                 logger.warning(
-                    "Gemini request hit a retryable upstream error; retrying in %.1fs (attempt %d/%d)",
+                    "Gemini request hit a retryable upstream error; "
+                    "retrying in %.1fs (attempt %d/%d)",
                     delay,
                     attempt + 1,
                     MAX_GEMINI_RETRIES,
@@ -403,17 +406,19 @@ def _update_job_status(
 def _mark_job_queued(job_id: str) -> bool:
     try:
         _update_job_status(job_id, "queued", expected_statuses={"upload_pending", "failed"})
-        return True
     except JobTransitionError:
         return False
+    else:
+        return True
 
 
 def _claim_job_for_processing(job_id: str) -> bool:
     try:
         _update_job_status(job_id, "processing", expected_statuses={"queued"})
-        return True
     except JobTransitionError:
         return False
+    else:
+        return True
 
 
 def _set_job_failed(job_id: str | None, error: str) -> None:
@@ -559,7 +564,6 @@ def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
         pdf_bytes = _download_pdf_bytes(bucket, key)
         analysis = analyze_resume_pdf(pdf_bytes, _resolve_job_description({}, job_record))
         _set_job_completed(job_id, analysis)
-        return {"status": "completed"}
     except UploadNotReadyError as exc:
         _set_job_failed(job_id, str(exc))
         return {"status": "failed", "error": str(exc)}
@@ -576,6 +580,8 @@ def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
     ) as exc:
         _handle_analysis_error(job_id, exc)
         return {"status": "failed", "error": str(exc)}
+    else:
+        return {"status": "completed"}
 
 
 def _queue_analysis_request(
@@ -661,12 +667,12 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
 
         if not isinstance(body, dict):
             return None, "Invalid JSON body"
-
-        return body, None
     except (binascii.Error, UnicodeDecodeError):
         return None, "Invalid base64-encoded body"
     except json.JSONDecodeError:
         return None, "Invalid JSON format"
+    else:
+        return body, None
 
 
 def _is_retryable_upstream_error(exc: Exception) -> bool:

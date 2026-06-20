@@ -1,3 +1,5 @@
+"""Create presigned upload requests for resume PDFs."""
+
 import base64
 import binascii
 import json
@@ -43,7 +45,7 @@ def _sanitize_filename(filename: str) -> str:
 
 
 def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
-    """Creates an S3 presigned POST for direct PDF upload."""
+    """Create an S3 presigned POST for direct PDF upload."""
     logger.info("Upload handler invoked")
 
     if not RESUME_BUCKET:

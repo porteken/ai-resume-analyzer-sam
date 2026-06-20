@@ -22,6 +22,7 @@ class FakeGenerateContentConfig:
 
 class FakeTypes:
     def __getattr__(self, name: str) -> Any:
+        """Return fake google.genai.types members used by tests."""
         if name == "Part":
             return FakePart
         if name == "GenerateContentConfig":

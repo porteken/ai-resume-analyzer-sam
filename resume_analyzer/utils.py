@@ -1,3 +1,5 @@
+"""Shared AWS client, response, and normalization helpers."""
+
 import json
 import logging
 import os

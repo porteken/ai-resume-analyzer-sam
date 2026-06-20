@@ -252,7 +252,7 @@ class TestStatusHandler:
         """Test RuntimeError when RESULTS_TABLE is not set."""
         original = status_handler_module.get_results_table
 
-        def _no_table():
+        def _no_table() -> None:
             raise RuntimeError("RESULTS_TABLE environment variable not configured")
 
         status_handler_module.get_results_table = _no_table

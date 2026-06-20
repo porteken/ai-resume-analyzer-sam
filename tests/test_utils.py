@@ -18,6 +18,7 @@ def assert_cors_headers(response: dict[str, Any]) -> None:
 def assert_response_structure(
     response: dict[str, Any],
     expected_status: int,
+    *,
     should_have_body: bool = True,
 ) -> None:
     """Assert that a response has the correct API Gateway structure."""
