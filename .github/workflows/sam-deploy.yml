@@ -492,33 +492,53 @@ jobs:
               --uri "$integration_uri" >/dev/null
           }
 
+          ensure_cors_method_response() {
+            local resource_id="$1"
+            local response_parameters
+            response_parameters='{"method.response.header.Access-Control-Allow-Headers":true,"method.response.header.Access-Control-Allow-Methods":true,"method.response.header.Access-Control-Allow-Origin":true}'
+
+            if aws apigateway get-method-response \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method OPTIONS \
+              --status-code 200 >/dev/null 2>&1; then
+                return 0
+            fi
+
+            aws apigateway put-method-response \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method OPTIONS \
+              --status-code 200 \
+              --response-parameters "$response_parameters" >/dev/null
+          }
+
+          upsert_cors_integration_response() {
+            local resource_id="$1"
+            local response_parameters
+            response_parameters="{\"method.response.header.Access-Control-Allow-Headers\":\"'Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key'\",\"method.response.header.Access-Control-Allow-Methods\":\"'OPTIONS,GET,POST'\",\"method.response.header.Access-Control-Allow-Origin\":\"'*'\"}"
+
+            aws apigateway put-integration-response \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method OPTIONS \
+              --status-code 200 \
+              --response-parameters "$response_parameters" >/dev/null
+          }
+
           ensure_cors_options() {
             local resource_id="$1"
             ensure_method_exists "$resource_id" OPTIONS
 
-            
             aws apigateway put-integration \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
               --http-method OPTIONS \
               --type MOCK \
               --request-templates '{"application/json":"{\"statusCode\":200}"}' >/dev/null
-              
-            
-            aws apigateway put-method-response \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method OPTIONS \
-              --status-code 200 \
-              --response-parameters "method.response.header.Access-Control-Allow-Headers=true,method.response.header.Access-Control-Allow-Methods=true,method.response.header.Access-Control-Allow-Origin=true" >/dev/null || true
-              
-            
-            aws apigateway put-integration-response \
-              --rest-api-id "$REST_API_ID" \
-              --resource-id "$resource_id" \
-              --http-method OPTIONS \
-              --status-code 200 \
-              --response-parameters "method.response.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key',method.response.header.Access-Control-Allow-Methods='OPTIONS,GET,POST',method.response.header.Access-Control-Allow-Origin='*'" >/dev/null || true
+
+            ensure_cors_method_response "$resource_id"
+            upsert_cors_integration_response "$resource_id"
           }
 
           
