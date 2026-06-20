@@ -23,11 +23,7 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     original_get_secrets_client = lambda_function._get_secrets_client
     original_client_class = lambda_function.Client
     original_types = lambda_function.types
-    original_genai_client = lambda_function._genai_client
-    original_genai_client_api_key = lambda_function._genai_client_api_key
-    original_secrets_client = lambda_function._secrets_client
-    original_cached_secret_arn = lambda_function._cached_secret_arn
-    original_cached_google_api_key = lambda_function._cached_google_api_key
+    original_client_cache = lambda_function._CLIENT_CACHE.copy()
 
     mock_boto3_clients["dynamodb_table"].get_item.return_value = {
         "Item": {
@@ -80,11 +76,15 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
 
     lambda_function.Client = MagicMock(return_value=mock_client)
     lambda_function.types = FakeTypes()
-    lambda_function._genai_client = None
-    lambda_function._genai_client_api_key = None
-    lambda_function._secrets_client = None
-    lambda_function._cached_secret_arn = None
-    lambda_function._cached_google_api_key = None
+    lambda_function._CLIENT_CACHE.update(
+        {
+            "genai_client": None,
+            "genai_client_api_key": None,
+            "secrets_client": None,
+            "cached_secret_arn": None,
+            "cached_google_api_key": None,
+        }
+    )
 
     try:
         yield lambda_function
@@ -96,11 +96,8 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
         lambda_function._get_secrets_client = original_get_secrets_client
         lambda_function.Client = original_client_class
         lambda_function.types = original_types
-        lambda_function._genai_client = original_genai_client
-        lambda_function._genai_client_api_key = original_genai_client_api_key
-        lambda_function._secrets_client = original_secrets_client
-        lambda_function._cached_secret_arn = original_cached_secret_arn
-        lambda_function._cached_google_api_key = original_cached_google_api_key
+        lambda_function._CLIENT_CACHE.clear()
+        lambda_function._CLIENT_CACHE.update(original_client_cache)
 
 
 class FakeServerUnavailableError(Exception):
@@ -441,8 +438,8 @@ class TestGeminiAnalysis:
     ) -> None:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY_SECRET_ARN", raising=False)
-        lambda_function_module._genai_client = None
-        lambda_function_module._genai_client_api_key = None
+        lambda_function_module._CLIENT_CACHE["genai_client"] = None
+        lambda_function_module._CLIENT_CACHE["genai_client_api_key"] = None
         with pytest.raises(RuntimeError, match="GOOGLE_API_KEY"):
             lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
 
@@ -566,10 +563,10 @@ class TestGeminiAnalysis:
             "arn:aws:secretsmanager:us-east-1:123456789012:secret:test",
         )
 
-        lambda_function_module._genai_client = None
-        lambda_function_module._genai_client_api_key = None
-        lambda_function_module._cached_secret_arn = None
-        lambda_function_module._cached_google_api_key = None
+        lambda_function_module._CLIENT_CACHE["genai_client"] = None
+        lambda_function_module._CLIENT_CACHE["genai_client_api_key"] = None
+        lambda_function_module._CLIENT_CACHE["cached_secret_arn"] = None
+        lambda_function_module._CLIENT_CACHE["cached_google_api_key"] = None
         monkeypatch.setattr(
             lambda_function_module,
             "_get_secrets_client",
@@ -811,7 +808,7 @@ class TestGeminiAnalysis:
                 "s3_key": "uploads/test-job-123/test-resume.pdf",
             }
         }
-        mock_boto3_clients["s3"].get_object.side_effect = Exception("Unexpected error")
+        mock_boto3_clients["s3"].get_object.side_effect = RuntimeError("Unexpected error")
         response = lambda_function_module.lambda_handler(
             {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": "test-job-123"},
             mock_lambda_context,

@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from google.genai import Client, types
 
 try:
@@ -44,11 +44,13 @@ MAX_GEMINI_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 INTERNAL_WORKER_SOURCE = "resume-analyzer.worker"
 
-_genai_client: Any | None = None
-_genai_client_api_key: str | None = None
-_secrets_client: Any | None = None
-_cached_secret_arn: str | None = None
-_cached_google_api_key: str | None = None
+_CLIENT_CACHE: dict[str, Any | str | None] = {
+    "genai_client": None,
+    "genai_client_api_key": None,
+    "secrets_client": None,
+    "cached_secret_arn": None,
+    "cached_google_api_key": None,
+}
 
 RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -208,10 +210,9 @@ def _download_pdf_bytes(bucket: str, key: str) -> bytes:
 
 
 def _get_secrets_client() -> Any:
-    global _secrets_client  # noqa: PLW0603
-    if _secrets_client is None:
-        _secrets_client = boto3.client("secretsmanager")
-    return _secrets_client
+    if _CLIENT_CACHE["secrets_client"] is None:
+        _CLIENT_CACHE["secrets_client"] = boto3.client("secretsmanager")
+    return _CLIENT_CACHE["secrets_client"]
 
 
 def _extract_google_api_key(secret_value: str) -> str:
@@ -237,21 +238,22 @@ def _extract_google_api_key(secret_value: str) -> str:
 
 
 def _get_google_api_key() -> str:
-    global _cached_secret_arn, _cached_google_api_key  # noqa: PLW0603
-
     secret_arn = os.environ.get("GOOGLE_API_KEY_SECRET_ARN", "").strip()
     if secret_arn:
-        if _cached_google_api_key is None or _cached_secret_arn != secret_arn:
+        if (
+            _CLIENT_CACHE["cached_google_api_key"] is None
+            or _CLIENT_CACHE["cached_secret_arn"] != secret_arn
+        ):
             response = _get_secrets_client().get_secret_value(SecretId=secret_arn)
             secret_string = str(response.get("SecretString") or "")
-            _cached_google_api_key = _extract_google_api_key(secret_string)
-            _cached_secret_arn = secret_arn
-        return _cached_google_api_key
+            _CLIENT_CACHE["cached_google_api_key"] = _extract_google_api_key(secret_string)
+            _CLIENT_CACHE["cached_secret_arn"] = secret_arn
+        return str(_CLIENT_CACHE["cached_google_api_key"])
 
     env_api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     if env_api_key:
-        _cached_secret_arn = None
-        _cached_google_api_key = None
+        _CLIENT_CACHE["cached_secret_arn"] = None
+        _CLIENT_CACHE["cached_google_api_key"] = None
         return env_api_key
 
     raise RuntimeError(
@@ -260,12 +262,11 @@ def _get_google_api_key() -> str:
 
 
 def _get_genai_client() -> Any:
-    global _genai_client, _genai_client_api_key  # noqa: PLW0603
     api_key = _get_google_api_key()
-    if _genai_client is None or _genai_client_api_key != api_key:
-        _genai_client = Client(api_key=api_key)
-        _genai_client_api_key = api_key
-    return _genai_client
+    if _CLIENT_CACHE["genai_client"] is None or _CLIENT_CACHE["genai_client_api_key"] != api_key:
+        _CLIENT_CACHE["genai_client"] = Client(api_key=api_key)
+        _CLIENT_CACHE["genai_client_api_key"] = api_key
+    return _CLIENT_CACHE["genai_client"]
 
 
 def _build_analysis_prompt(job_description: str) -> str:
@@ -565,7 +566,14 @@ def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         _set_job_failed(job_id, str(exc))
         return {"status": "failed", "error": str(exc)}
-    except Exception as exc:  # noqa: BLE001
+    except (
+        AttributeError,
+        BotoCoreError,
+        ClientError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+    ) as exc:
         _handle_analysis_error(job_id, exc)
         return {"status": "failed", "error": str(exc)}
 

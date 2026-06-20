@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SAM_BUILD_IMAGE="${SAM_BUILD_IMAGE:-public.ecr.aws/sam/build-python3.12:1.136.0}"
+TASK_DIR="$(pwd -P)"
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+readonly TASK_DIR HOST_UID HOST_GID
 
 echo "Exporting requirements.txt from uv..."
 uv export --no-dev --format requirements-txt --output-file requirements.txt --locked
@@ -15,15 +19,15 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 docker run --rm \
-  -v "$PWD":/var/task \
+  -v "${TASK_DIR}":/var/task \
   "${SAM_BUILD_IMAGE}" \
   /bin/bash -c "rm -rf /var/task/layers/dependencies/python"
 
 mkdir -p layers/dependencies/python
 
 docker run --rm \
-  -v "$PWD":/var/task \
-  -u "$(id -u):$(id -g)" \
+  -v "${TASK_DIR}":/var/task \
+  -u "${HOST_UID}:${HOST_GID}" \
   "${SAM_BUILD_IMAGE}" \
   /bin/bash -c "pip install -r requirements.txt -t /var/task/layers/dependencies/python --no-cache-dir"
 

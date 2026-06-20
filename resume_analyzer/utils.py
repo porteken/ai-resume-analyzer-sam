@@ -16,10 +16,12 @@ ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 CORS_ALLOWED_ORIGINS: set[str] = {o.strip().rstrip("/") for o in _cors_raw.split(",") if o.strip()}
 
-dynamodb: Any | None = None
-s3_client: Any | None = None
-lambda_client: Any | None = None
-_results_table: Any | None = None
+_CLIENT_CACHE: dict[str, Any | None] = {
+    "dynamodb": None,
+    "s3": None,
+    "lambda": None,
+    "results_table": None,
+}
 
 _BOTO_CLIENT_CONFIG = Config(
     tcp_keepalive=True,
@@ -29,51 +31,49 @@ _BOTO_CLIENT_CONFIG = Config(
 
 def get_dynamodb_resource() -> Any:
     """Lazily initialise and return the DynamoDB resource."""
-    global dynamodb  # noqa: PLW0603
-    if dynamodb is None:
-        dynamodb = boto3.resource("dynamodb", config=_BOTO_CLIENT_CONFIG)
-    return dynamodb
+    if _CLIENT_CACHE["dynamodb"] is None:
+        _CLIENT_CACHE["dynamodb"] = boto3.resource("dynamodb", config=_BOTO_CLIENT_CONFIG)
+    return _CLIENT_CACHE["dynamodb"]
 
 
 def get_s3_client() -> Any:
     """Lazily initialise and return the S3 client."""
-    global s3_client  # noqa: PLW0603
-    if s3_client is None:
-        s3_client = boto3.client("s3", config=_BOTO_CLIENT_CONFIG)
-    return s3_client
+    if _CLIENT_CACHE["s3"] is None:
+        _CLIENT_CACHE["s3"] = boto3.client("s3", config=_BOTO_CLIENT_CONFIG)
+    return _CLIENT_CACHE["s3"]
 
 
 def get_lambda_client() -> Any:
     """Lazily initialise and return the Lambda client."""
-    global lambda_client  # noqa: PLW0603
-    if lambda_client is None:
-        lambda_client = boto3.client("lambda", config=_BOTO_CLIENT_CONFIG)
-    return lambda_client
+    if _CLIENT_CACHE["lambda"] is None:
+        _CLIENT_CACHE["lambda"] = boto3.client("lambda", config=_BOTO_CLIENT_CONFIG)
+    return _CLIENT_CACHE["lambda"]
 
 
 def reset_cached_clients() -> None:
     """Reset cached boto3 clients and table references used by tests."""
-    global dynamodb, s3_client, lambda_client, _results_table  # noqa: PLW0603
-    dynamodb = None
-    s3_client = None
-    lambda_client = None
-    _results_table = None
+    _CLIENT_CACHE.update(
+        {
+            "dynamodb": None,
+            "s3": None,
+            "lambda": None,
+            "results_table": None,
+        }
+    )
 
 
 def get_results_table() -> Any:
     """Lazily initialise and return the DynamoDB results table."""
-    global _results_table  # noqa: PLW0603
-    if _results_table is None:
+    if _CLIENT_CACHE["results_table"] is None:
         if not RESULTS_TABLE:
             raise RuntimeError("RESULTS_TABLE environment variable not configured")
-        _results_table = get_dynamodb_resource().Table(RESULTS_TABLE)
-    return _results_table
+        _CLIENT_CACHE["results_table"] = get_dynamodb_resource().Table(RESULTS_TABLE)
+    return _CLIENT_CACHE["results_table"]
 
 
 def reset_results_table() -> None:
     """Reset cached table reference (used by tests)."""
-    global _results_table  # noqa: PLW0603
-    _results_table = None
+    _CLIENT_CACHE["results_table"] = None
 
 
 def get_cors_origin(event: dict[str, Any] | None = None) -> str:
