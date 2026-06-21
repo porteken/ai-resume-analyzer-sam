@@ -12,7 +12,9 @@ from tests.test_utils import assert_error_response, assert_success_response
 
 
 @pytest.fixture
-def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
+def lambda_function_module(
+    mock_boto3_clients: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> Any:
     """Import lambda_function with mocked dependencies."""
     from resume_analyzer import lambda_function
 
@@ -20,10 +22,8 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     original_get_results_table = lambda_function.get_results_table
     original_get_s3_client = lambda_function.get_s3_client
     original_get_lambda_client = lambda_function.get_lambda_client
-    original_get_secrets_client = lambda_function._get_secrets_client
     original_client_class = lambda_function.Client
     original_types = lambda_function.types
-    original_client_cache = lambda_function._CLIENT_CACHE.copy()
 
     mock_boto3_clients["dynamodb_table"].get_item.return_value = {
         "Item": {
@@ -43,7 +43,9 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
     mock_secrets_client.get_secret_value.return_value = {
         "SecretString": json.dumps({"GOOGLE_API_KEY": "test-api-key-123"})
     }
-    lambda_function._get_secrets_client = lambda: mock_secrets_client
+    monkeypatch.setattr(
+        lambda_function.boto3, "client", MagicMock(return_value=mock_secrets_client)
+    )
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -76,15 +78,7 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
 
     lambda_function.Client = MagicMock(return_value=mock_client)
     lambda_function.types = FakeTypes()
-    lambda_function._CLIENT_CACHE.update(
-        {
-            "genai_client": None,
-            "genai_client_api_key": None,
-            "secrets_client": None,
-            "cached_secret_arn": None,
-            "cached_google_api_key": None,
-        }
-    )
+    lambda_function.reset_cached_clients()
 
     try:
         yield lambda_function
@@ -93,11 +87,9 @@ def lambda_function_module(mock_boto3_clients: dict[str, Any]) -> Any:
         lambda_function.get_results_table = original_get_results_table
         lambda_function.get_s3_client = original_get_s3_client
         lambda_function.get_lambda_client = original_get_lambda_client
-        lambda_function._get_secrets_client = original_get_secrets_client
         lambda_function.Client = original_client_class
         lambda_function.types = original_types
-        lambda_function._CLIENT_CACHE.clear()
-        lambda_function._CLIENT_CACHE.update(original_client_cache)
+        lambda_function.reset_cached_clients()
 
 
 class FakeServerUnavailableError(Exception):
@@ -157,7 +149,7 @@ class TestGeminiAnalysis:
         assert "gaps" in analysis
         assert "recommendations" in analysis
 
-        call_args = lambda_function_module._get_genai_client().models.generate_content.call_args[1]
+        call_args = lambda_function_module.Client.return_value.models.generate_content.call_args[1]
         assert call_args["model"] == "gemini-3-flash-preview"
 
         config = call_args["config"]
@@ -187,7 +179,7 @@ class TestGeminiAnalysis:
                 "job_description": "Python developer position",
             }
         }
-        lambda_function_module._get_genai_client().models.generate_content.return_value.text = (
+        lambda_function_module.Client.return_value.models.generate_content.return_value.text = (
             json.dumps(
                 {
                     "name": "Jane Doe",
@@ -354,7 +346,7 @@ class TestGeminiAnalysis:
                 "s3_key": "uploads/test-job-123/test-resume.pdf",
             }
         }
-        lambda_function_module._get_genai_client().models.generate_content.return_value.text = (
+        lambda_function_module.Client.return_value.models.generate_content.return_value.text = (
             "not json"
         )
 
@@ -438,13 +430,12 @@ class TestGeminiAnalysis:
     ) -> None:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_API_KEY_SECRET_ARN", raising=False)
-        lambda_function_module._CLIENT_CACHE["genai_client"] = None
-        lambda_function_module._CLIENT_CACHE["genai_client_api_key"] = None
+        lambda_function_module.reset_cached_clients()
         with pytest.raises(RuntimeError, match="GOOGLE_API_KEY"):
             lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
 
     def test_analyze_empty_gemini_response(self, lambda_function_module: Any) -> None:
-        mock_client = lambda_function_module._get_genai_client()
+        mock_client = lambda_function_module.Client.return_value
         mock_client.models.generate_content.return_value.text = None
         with pytest.raises(RuntimeError, match="empty response"):
             lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
@@ -471,7 +462,7 @@ class TestGeminiAnalysis:
             sleep_calls.append,
         )
 
-        mock_client = lambda_function_module._get_genai_client()
+        mock_client = lambda_function_module.Client.return_value
         mock_client.models.generate_content.side_effect = [
             FakeServerUnavailableError(),
             FakeServerUnavailableError(),
@@ -509,7 +500,7 @@ class TestGeminiAnalysis:
             sleep_calls.append,
         )
 
-        mock_client = lambda_function_module._get_genai_client()
+        mock_client = lambda_function_module.Client.return_value
         mock_client.models.generate_content.side_effect = [
             FakeRateLimitError(),
             mock_client.models.generate_content.return_value,
@@ -563,17 +554,14 @@ class TestGeminiAnalysis:
             "arn:aws:secretsmanager:us-east-1:123456789012:secret:test",
         )
 
-        lambda_function_module._CLIENT_CACHE["genai_client"] = None
-        lambda_function_module._CLIENT_CACHE["genai_client_api_key"] = None
-        lambda_function_module._CLIENT_CACHE["cached_secret_arn"] = None
-        lambda_function_module._CLIENT_CACHE["cached_google_api_key"] = None
+        lambda_function_module.reset_cached_clients()
         monkeypatch.setattr(
-            lambda_function_module,
-            "_get_secrets_client",
-            lambda: secret_client,
+            lambda_function_module.boto3,
+            "client",
+            MagicMock(return_value=secret_client),
         )
 
-        lambda_function_module._get_genai_client()
+        lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
 
         assert lambda_function_module.Client.call_args[1]["api_key"] == "secret-api-key"
 
@@ -694,7 +682,7 @@ class TestGeminiAnalysis:
         assert body["message"] == "Analysis already completed"
         assert "analysis_result" not in body
         lambda_function_module.get_s3_client().get_object.assert_not_called()
-        lambda_function_module._get_genai_client().models.generate_content.assert_not_called()
+        lambda_function_module.Client.return_value.models.generate_content.assert_not_called()
 
     def test_rejects_duplicate_processing_request(
         self,

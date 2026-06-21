@@ -152,7 +152,7 @@ def sample_upload_event() -> dict[str, Any]:
 
 @pytest.fixture
 def sample_analyze_event() -> dict[str, Any]:
-    """Sample API Gateway event for analyze endpoint."""
+    """Sample API Gateway event for analysis endpoint."""
     body_dict = {
         "job_id": "test-job-123",
         "s3_url": "s3://test-resume-bucket/uploads/test-job-123/test-resume.pdf",
@@ -169,7 +169,7 @@ def sample_analyze_event() -> dict[str, Any]:
 
 @pytest.fixture
 def sample_status_event() -> dict[str, Any]:
-    """Sample API Gateway event for status endpoint."""
+    """Sample API Gateway event for a status endpoint."""
     return {
         "httpMethod": "GET",
         "path": "/status/test-job-123",
@@ -195,7 +195,7 @@ def sample_s3_event() -> dict[str, Any]:
 
 @pytest.fixture
 def mock_lambda_context() -> MagicMock:
-    """Mock Lambda context object."""
+    """Mock a Lambda context object."""
     context = MagicMock()
     context.function_name = "test-function"
     context.function_version = "$LATEST"

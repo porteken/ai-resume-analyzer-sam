@@ -54,6 +54,20 @@ _CLIENT_CACHE: dict[str, Any | str | None] = {
     "cached_google_api_key": None,
 }
 
+
+def reset_cached_clients() -> None:
+    """Reset cached Gemini and Secrets Manager clients used by tests."""
+    _CLIENT_CACHE.update(
+        {
+            "genai_client": None,
+            "genai_client_api_key": None,
+            "secrets_client": None,
+            "cached_secret_arn": None,
+            "cached_google_api_key": None,
+        }
+    )
+
+
 RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -146,6 +160,14 @@ class JobTransitionError(Exception):
     """Raised when a conditional job status transition fails."""
 
 
+def _client_error_code(exc: ClientError, default: str = "Unknown") -> str:
+    response = exc.response or {}
+    error = response.get("Error", {})
+    if isinstance(error, dict):
+        return str(error.get("Code", default))
+    return default
+
+
 def _parse_s3_url(s3_url: str) -> tuple[str, str]:
     parsed = urlparse(s3_url)
 
@@ -181,7 +203,7 @@ def _ensure_pdf_object_ready(bucket: str, key: str) -> None:
     try:
         metadata = get_s3_client().head_object(**_build_s3_kwargs(bucket, key))
     except ClientError as exc:
-        error_code = exc.response.get("Error", {}).get("Code", "")
+        error_code = _client_error_code(exc, default="")
         if error_code in {"404", "NoSuchKey", "NotFound"}:
             raise UploadNotReadyError(
                 "Uploaded resume not found yet. Please finish the upload and try again."
@@ -333,7 +355,7 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
         raise RuntimeError("Gemini did not return a response")
 
     text = getattr(response, "text", None)
-    if not text:
+    if not isinstance(text, str) or not text:
         raise RuntimeError("Gemini returned an empty response")
 
     try:
@@ -345,7 +367,7 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
 def _conditional_check_failed(exc: Exception) -> bool:
     return (
         isinstance(exc, ClientError)
-        and exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
+        and _client_error_code(exc) == "ConditionalCheckFailedException"
     )
 
 
@@ -648,8 +670,11 @@ def _get_job_record(job_id: str) -> dict[str, Any]:
         table = get_results_table()
         item = table.get_item(Key={"job_id": job_id}).get("Item")
         return item if isinstance(item, dict) else {}
-    except Exception:
+    except (BotoCoreError, ClientError, RuntimeError):
         logger.exception("Failed to read DynamoDB job record")
+        return {}
+    except Exception:
+        logger.exception("Unexpected failure reading DynamoDB job record")
         return {}
 
 
@@ -719,9 +744,9 @@ def _handle_analysis_error(
     *,
     event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Handle analysis errors and return appropriate response."""
+    """Handle analysis errors and return the appropriate response."""
     if isinstance(exc, ClientError):
-        code = exc.response.get("Error", {}).get("Code", "Unknown")
+        code = _client_error_code(exc)
         message = f"S3 access error: {code}"
         if job_id:
             _set_job_failed(job_id, message)

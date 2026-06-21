@@ -25,7 +25,7 @@ def status_handler_module(mock_boto3_clients) -> Any:
 @pytest.mark.integration
 @pytest.mark.aws
 class TestStatusHandler:
-    """Test suite for status_handler lambda function."""
+    """Test suite for the status_handler lambda function."""
 
     def test_get_completed_job(
         self,
@@ -194,7 +194,7 @@ class TestStatusHandler:
     def test_missing_job_id_scenarios(
         self, status_handler_module, mock_lambda_context, event, expected_error
     ) -> None:
-        """Test request without job_id parameter in various scenarios."""
+        """Test request without a job_id parameter in various scenarios."""
         response = status_handler_module.lambda_handler(event, mock_lambda_context)
         assert_error_response(response, 400, expected_error)
 
@@ -219,7 +219,7 @@ class TestStatusHandler:
         mock_lambda_context,
         mock_boto3_clients,
     ) -> None:
-        """Test handling of job with unknown status."""
+        """Test handling of a job with unknown status."""
         mock_boto3_clients["dynamodb_table"].get_item.return_value = {
             "Item": {"job_id": "test-job-123", "filename": "test-resume.pdf"}
         }

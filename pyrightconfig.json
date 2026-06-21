@@ -10,7 +10,7 @@
         ".aws-sam",
         "layers",
         "**/node_modules",
-        "**/.*",
+        "**/.*"
     ],
     "pythonVersion": "3.12",
     "pythonPlatform": "Linux",
@@ -24,5 +24,5 @@
     "reportUnknownLambdaType": false,
     "reportGeneralTypeIssues": false,
     "venvPath": ".",
-    "venv": ".venv",
+    "venv": ".venv"
 }

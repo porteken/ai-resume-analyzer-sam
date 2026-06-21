@@ -28,12 +28,12 @@ class TestEventStructure:
         assert "filename" in body
 
     def test_status_event_has_required_fields(self, sample_status_event) -> None:
-        """Test that status event contains required fields."""
+        """Test that a status event contains required fields."""
         assert "pathParameters" in sample_status_event
         assert "job_id" in sample_status_event["pathParameters"]
 
     def test_s3_event_has_required_fields(self, sample_s3_event) -> None:
-        """Test that S3 event contains required fields."""
+        """Test that the S3 event contains required fields."""
         assert "Records" in sample_s3_event
         record = sample_s3_event["Records"][0]
         assert "s3" in record
@@ -68,7 +68,7 @@ class TestJSONSerialization:
         assert parsed["status"] == "processing"
 
     def test_json_invalid_syntax(self) -> None:
-        """Test that invalid JSON raises error."""
+        """Test that invalid JSON raises an error."""
         with pytest.raises(json.JSONDecodeError):
             json.loads("not valid json{")
 
@@ -77,7 +77,7 @@ class TestResponseStructure:
     """Test API response structure."""
 
     def test_success_response_structure(self) -> None:
-        """Test that success response has correct structure."""
+        """Test that the success response has the correct structure."""
         response = {
             "statusCode": 200,
             "headers": {
@@ -90,10 +90,12 @@ class TestResponseStructure:
         assert response["statusCode"] == 200
         assert "headers" in response
         assert "body" in response
-        assert response["headers"]["Access-Control-Allow-Origin"] == "*"
+        response_headers = response["headers"]
+        assert isinstance(response_headers, dict)
+        assert response_headers["Access-Control-Allow-Origin"] == "*"
 
     def test_error_response_structure(self) -> None:
-        """Test that error response has correct structure."""
+        """Test that the error response has the correct structure."""
         response = {
             "statusCode": 400,
             "headers": {
@@ -104,7 +106,9 @@ class TestResponseStructure:
         }
 
         assert response["statusCode"] == 400
-        assert "error" in json.loads(response["body"])
+        response_body = response["body"]
+        assert isinstance(response_body, str)
+        assert "error" in json.loads(response_body)
 
     def test_cors_headers_present(self) -> None:
         """Test that CORS headers are included."""
@@ -224,7 +228,7 @@ class TestDataTypes:
         assert data_str == "Hello World"
 
     def test_string_to_bytes_conversion(self) -> None:
-        """Test string to bytes conversion."""
+        """Test string-to-bytes conversion."""
         data_str = "Hello World"
         data_bytes = data_str.encode("utf-8")
 

@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 try:
     from resume_analyzer.utils import (
         RESUME_BUCKET,
@@ -58,13 +60,16 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     try:
         table = get_results_table()
 
-        body = event.get("body")
-        if body is None:
+        raw_body = event.get("body")
+        if raw_body is None:
             return api_response(400, {"error": "No body in request"}, event=event)
 
+        body: Any = raw_body
         if event.get("isBase64Encoded", False):
-            body = base64.b64decode(body, validate=True).decode("utf-8")
-        if isinstance(body, str):
+            if not isinstance(raw_body, str | bytes | bytearray):
+                return api_response(400, {"error": "Invalid JSON body"}, event=event)
+            body = base64.b64decode(raw_body, validate=True).decode("utf-8")
+        if isinstance(body, str | bytes | bytearray):
             body = json.loads(body)
 
         if not isinstance(body, dict):
@@ -135,6 +140,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return api_response(400, {"error": str(exc)}, event=event)
     except RuntimeError as exc:
         return api_response(500, {"error": str(exc)}, event=event)
-    except Exception:
+    except (BotoCoreError, ClientError):
         logger.exception("Upload handler failed")
+        return api_response(500, {"error": "Internal server error"}, event=event)
+    except Exception:
+        logger.exception("Unexpected upload handler failure")
         return api_response(500, {"error": "Internal server error"}, event=event)

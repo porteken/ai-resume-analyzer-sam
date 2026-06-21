@@ -3,10 +3,13 @@
 import json
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.config import Config
+
+if TYPE_CHECKING:
+    from botocore.config import _RetryDict
 
 logger = logging.getLogger(__name__)
 
@@ -25,28 +28,31 @@ _CLIENT_CACHE: dict[str, Any | None] = {
     "results_table": None,
 }
 
+
+_BOTO_RETRIES: "_RetryDict" = {"max_attempts": 3, "mode": "standard"}
+
 _BOTO_CLIENT_CONFIG = Config(
     tcp_keepalive=True,
-    retries={"max_attempts": 3, "mode": "standard"},
+    retries=_BOTO_RETRIES,
 )
 
 
 def get_dynamodb_resource() -> Any:
-    """Lazily initialise and return the DynamoDB resource."""
+    """Lazily initialize and return the DynamoDB resource."""
     if _CLIENT_CACHE["dynamodb"] is None:
         _CLIENT_CACHE["dynamodb"] = boto3.resource("dynamodb", config=_BOTO_CLIENT_CONFIG)
     return _CLIENT_CACHE["dynamodb"]
 
 
 def get_s3_client() -> Any:
-    """Lazily initialise and return the S3 client."""
+    """Lazily initialize and return the S3 client."""
     if _CLIENT_CACHE["s3"] is None:
         _CLIENT_CACHE["s3"] = boto3.client("s3", config=_BOTO_CLIENT_CONFIG)
     return _CLIENT_CACHE["s3"]
 
 
 def get_lambda_client() -> Any:
-    """Lazily initialise and return the Lambda client."""
+    """Lazily initialize and return the Lambda client."""
     if _CLIENT_CACHE["lambda"] is None:
         _CLIENT_CACHE["lambda"] = boto3.client("lambda", config=_BOTO_CLIENT_CONFIG)
     return _CLIENT_CACHE["lambda"]
@@ -65,7 +71,7 @@ def reset_cached_clients() -> None:
 
 
 def get_results_table() -> Any:
-    """Lazily initialise and return the DynamoDB results table."""
+    """Lazily initialize and return the DynamoDB results table."""
     if _CLIENT_CACHE["results_table"] is None:
         if not RESULTS_TABLE:
             raise RuntimeError("RESULTS_TABLE environment variable not configured")
@@ -130,9 +136,9 @@ def coerce_object_list(value: Any) -> list[dict[str, Any]]:
 
 
 def normalize_analysis_result(analysis: Any, *, strict: bool = False) -> dict[str, Any]:
-    """Normalise an analysis dict, back-filling list fields.
+    """Normalize an analysis dict, back-filling list fields.
 
-    When *strict* is True (Gemini output), raises TypeError on non-dict input.
+    When *strict* is True (Gemini output), it raises TypeError on non-dict input.
     When False (DynamoDB retrieval), returns the value unchanged.
     """
     if not isinstance(analysis, dict):

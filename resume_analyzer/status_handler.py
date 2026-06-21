@@ -4,6 +4,8 @@ import logging
 import time
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 try:
     from resume_analyzer.utils import (
         api_response,
@@ -24,7 +26,8 @@ def _get_job_item(job_id: str) -> dict[str, Any] | None:
     """Get job item from DynamoDB."""
     table = get_results_table()
     response = table.get_item(Key={"job_id": job_id})
-    return response.get("Item")
+    item = response.get("Item")
+    return item if isinstance(item, dict) else None
 
 
 def _is_job_expired(ttl_value: Any) -> bool:
@@ -66,6 +69,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             result["error"] = item.get("error")
 
         return api_response(200, result, event=event)
-    except Exception:
+    except (BotoCoreError, ClientError, RuntimeError):
         logger.exception("Status handler failed")
+        return api_response(500, {"error": "Internal server error"}, event=event)
+    except Exception:
+        logger.exception("Unexpected status handler failure")
         return api_response(500, {"error": "Internal server error"}, event=event)
