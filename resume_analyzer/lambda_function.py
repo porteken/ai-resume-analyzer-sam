@@ -733,7 +733,7 @@ def _get_job_record(job_id: str) -> dict[str, Any]:
     except (BotoCoreError, ClientError, RuntimeError):
         logger.exception("Failed to read DynamoDB job record")
         return {}
-    except Exception:
+    except (AttributeError, TypeError):
         logger.exception("Unexpected failure reading DynamoDB job record")
         return {}
 

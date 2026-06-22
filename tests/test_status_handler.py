@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 from tests.test_utils import assert_error_response, assert_success_response
 
@@ -206,7 +207,10 @@ class TestStatusHandler:
         mock_boto3_clients,
     ) -> None:
         """Test error handling when DynamoDB fails."""
-        mock_boto3_clients["dynamodb_table"].get_item.side_effect = Exception("DynamoDB error")
+        mock_boto3_clients["dynamodb_table"].get_item.side_effect = ClientError(
+            {"Error": {"Code": "InternalServerError"}},
+            "GetItem",
+        )
 
         response = status_handler_module.lambda_handler(sample_status_event, mock_lambda_context)
 

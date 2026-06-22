@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 from tests.test_utils import assert_error_response, assert_success_response
 
@@ -98,7 +99,10 @@ class TestUploadHandler:
         mock_lambda_context,
         mock_boto3_clients,
     ) -> None:
-        mock_boto3_clients["s3"].generate_presigned_post.side_effect = Exception("S3 failure")
+        mock_boto3_clients["s3"].generate_presigned_post.side_effect = ClientError(
+            {"Error": {"Code": "InternalError"}},
+            "CreatePresignedPost",
+        )
 
         response = upload_handler_module.lambda_handler(sample_upload_event, mock_lambda_context)
         assert_error_response(response, 500)

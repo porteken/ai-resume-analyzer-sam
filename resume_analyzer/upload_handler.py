@@ -177,6 +177,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     except (BotoCoreError, ClientError):
         logger.exception("Upload handler failed")
         return _error_response(event, 500, "Internal server error")
-    except Exception:
+    except (AttributeError, KeyError):
         logger.exception("Unexpected upload handler failure")
         return _error_response(event, 500, "Internal server error")

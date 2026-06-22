@@ -589,7 +589,10 @@ class TestGeminiAnalysis:
     def test_get_job_record_exception(
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
     ) -> None:
-        mock_boto3_clients["dynamodb_table"].get_item.side_effect = Exception("DB error")
+        mock_boto3_clients["dynamodb_table"].get_item.side_effect = ClientError(
+            {"Error": {"Code": "InternalServerError"}},
+            "GetItem",
+        )
         result = lambda_function_module._get_job_record("job-123")
         assert result == {}
 

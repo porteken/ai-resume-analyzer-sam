@@ -88,6 +88,6 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     except (BotoCoreError, ClientError, RuntimeError):
         logger.exception("Status handler failed")
         return _error_response(event, 500, "Internal server error")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         logger.exception("Unexpected status handler failure")
         return _error_response(event, 500, "Internal server error")
