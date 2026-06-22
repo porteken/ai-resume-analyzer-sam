@@ -3,6 +3,7 @@
 import base64
 import binascii
 import http
+import importlib
 import json
 import logging
 import os
@@ -16,25 +17,17 @@ from botocore.exceptions import BotoCoreError, ClientError
 from google.genai import Client, types
 
 try:
-    from resume_analyzer.utils import (
-        ACCOUNT_ID,
-        RESUME_BUCKET,
-        api_response,
-        get_lambda_client,
-        get_results_table,
-        get_s3_client,
-        normalize_analysis_result,
-    )
+    _utils = importlib.import_module("resume_analyzer.utils")
 except ImportError:
-    from utils import (
-        ACCOUNT_ID,
-        RESUME_BUCKET,
-        api_response,
-        get_lambda_client,
-        get_results_table,
-        get_s3_client,
-        normalize_analysis_result,
-    )
+    _utils = importlib.import_module("utils")
+
+ACCOUNT_ID = _utils.ACCOUNT_ID
+RESUME_BUCKET = _utils.RESUME_BUCKET
+api_response = _utils.api_response
+get_lambda_client = _utils.get_lambda_client
+get_results_table = _utils.get_results_table
+get_s3_client = _utils.get_s3_client
+normalize_analysis_result = _utils.normalize_analysis_result
 
 logger = logging.getLogger(__name__)
 
@@ -46,110 +39,69 @@ MAX_GEMINI_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 INTERNAL_WORKER_SOURCE = "resume-analyzer.worker"
 
-_CLIENT_CACHE: dict[str, Any | str | None] = {
-    "genai_client": None,
-    "genai_client_api_key": None,
-    "secrets_client": None,
-    "cached_secret_arn": None,
-    "cached_google_api_key": None,
-}
+CLIENT_CACHE_KEYS = (
+    "genai_client",
+    "genai_client_api_key",
+    "secrets_client",
+    "cached_secret_arn",
+    "cached_google_api_key",
+)
+
+_CLIENT_CACHE: dict[str, Any | str | None] = dict.fromkeys(CLIENT_CACHE_KEYS)
 
 
 def reset_cached_clients() -> None:
     """Reset cached Gemini and Secrets Manager clients used by tests."""
-    _CLIENT_CACHE.update(
+    _CLIENT_CACHE.update(dict.fromkeys(CLIENT_CACHE_KEYS))
+
+
+STRING_FIELDS = ("name", "summary")
+STRING_LIST_FIELDS = ("skills", "strengths", "gaps", "recommendations")
+CONTACT_FIELDS = ("email", "phone", "location", "linkedin")
+EXPERIENCE_FIELDS = ("company", "role", "duration")
+EDUCATION_FIELDS = ("institution", "degree", "field", "graduation_date")
+
+
+def _string_schema() -> dict[str, str]:
+    return {"type": "string"}
+
+
+def _string_list_schema() -> dict[str, Any]:
+    return {"type": "array", "items": _string_schema()}
+
+
+def _object_schema(properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def _object_list_schema(properties: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "array", "items": _object_schema(properties)}
+
+
+def _analysis_response_schema() -> dict[str, Any]:
+    properties: dict[str, Any] = {field: _string_schema() for field in STRING_FIELDS}
+    properties["contact_info"] = _object_schema(
+        {field: _string_schema() for field in CONTACT_FIELDS}
+    )
+    properties.update({field: _string_list_schema() for field in STRING_LIST_FIELDS})
+    properties["experience"] = _object_list_schema(
         {
-            "genai_client": None,
-            "genai_client_api_key": None,
-            "secrets_client": None,
-            "cached_secret_arn": None,
-            "cached_google_api_key": None,
+            **{field: _string_schema() for field in EXPERIENCE_FIELDS},
+            "highlights": _string_list_schema(),
         }
     )
+    properties["education"] = _object_list_schema(
+        {field: _string_schema() for field in EDUCATION_FIELDS}
+    )
+    return _object_schema(properties)
 
 
-RESUME_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string"},
-        "contact_info": {
-            "type": "object",
-            "properties": {
-                "email": {"type": "string"},
-                "phone": {"type": "string"},
-                "location": {"type": "string"},
-                "linkedin": {"type": "string"},
-            },
-            "required": ["email", "phone", "location", "linkedin"],
-            "additionalProperties": False,
-        },
-        "summary": {"type": "string"},
-        "skills": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "experience": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "company": {"type": "string"},
-                    "role": {"type": "string"},
-                    "duration": {"type": "string"},
-                    "highlights": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["company", "role", "duration", "highlights"],
-                "additionalProperties": False,
-            },
-        },
-        "education": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "institution": {"type": "string"},
-                    "degree": {"type": "string"},
-                    "field": {"type": "string"},
-                    "graduation_date": {"type": "string"},
-                },
-                "required": [
-                    "institution",
-                    "degree",
-                    "field",
-                    "graduation_date",
-                ],
-                "additionalProperties": False,
-            },
-        },
-        "strengths": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "gaps": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "recommendations": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-    },
-    "required": [
-        "name",
-        "contact_info",
-        "summary",
-        "skills",
-        "experience",
-        "education",
-        "strengths",
-        "gaps",
-        "recommendations",
-    ],
-    "additionalProperties": False,
-}
+RESUME_ANALYSIS_RESPONSE_SCHEMA = _analysis_response_schema()
 
 
 class UploadNotReadyError(Exception):
@@ -158,6 +110,47 @@ class UploadNotReadyError(Exception):
 
 class JobTransitionError(Exception):
     """Raised when a conditional job status transition fails."""
+
+
+ANALYSIS_INPUT_ERRORS = (UploadNotReadyError, ValueError)
+FAILED_WORKER_EXCEPTIONS = (
+    AttributeError,
+    BotoCoreError,
+    ClientError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+)
+S3_NOT_FOUND_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
+GOOGLE_API_KEY_FIELDS = ("GOOGLE_API_KEY", "google_api_key", "api_key")
+RETRYABLE_STATUS_CODES = frozenset(
+    {
+        http.HTTPStatus.SERVICE_UNAVAILABLE,
+        http.HTTPStatus.TOO_MANY_REQUESTS,
+        "503",
+        "429",
+    }
+)
+RETRYABLE_ERROR_TYPES = frozenset(
+    {
+        "ServerError",
+        "ServiceUnavailable",
+        "TooManyRequests",
+        "RateLimitError",
+        "ResourceExhausted",
+    }
+)
+RETRYABLE_MESSAGE_MARKERS = (
+    "503",
+    "429",
+    "high demand",
+    "service unavailable",
+    "too many requests",
+    "rate limit",
+    "quota",
+)
+VIRTUAL_HOSTED_S3_PARTS_MIN = 3
+PATH_STYLE_S3_PARTS = 2
 
 
 def _client_error_code(exc: ClientError, default: str = "Unknown") -> str:
@@ -172,24 +165,38 @@ def _parse_s3_url(s3_url: str) -> tuple[str, str]:
     parsed = urlparse(s3_url)
 
     if parsed.scheme == "s3" and parsed.netloc:
-        return parsed.netloc, unquote(parsed.path.lstrip("/"))
+        return parsed.netloc, _decoded_s3_key(parsed.path)
 
-    if parsed.scheme in {"http", "https"} and parsed.netloc.endswith("amazonaws.com"):
-        host_parts = parsed.netloc.split(".")
-        path = parsed.path.lstrip("/")
-
-        if host_parts[0] == "s3":
-            parts = path.split("/", 1)
-            expected_parts = 2
-            if len(parts) != expected_parts:
-                raise ValueError("Invalid S3 path-style URL")
-            return parts[0], unquote(parts[1])
-
-        min_host_parts = 3
-        if len(host_parts) >= min_host_parts and host_parts[1] == "s3":
-            return host_parts[0], unquote(path)
+    if parsed.scheme in {"http", "https"}:
+        location = _s3_location_from_amazon_url(parsed.netloc, parsed.path)
+        if location:
+            return location
 
     raise ValueError("s3_url must be a valid s3:// or https://...amazonaws.com URL")
+
+
+def _decoded_s3_key(path: str) -> str:
+    return unquote(path.lstrip("/"))
+
+
+def _s3_location_from_amazon_url(host: str, path: str) -> tuple[str, str] | None:
+    if not host.endswith("amazonaws.com"):
+        return None
+
+    host_parts = host.split(".")
+    key_path = path.lstrip("/")
+    if host_parts[0] == "s3":
+        return _path_style_s3_location(key_path)
+    if len(host_parts) >= VIRTUAL_HOSTED_S3_PARTS_MIN and host_parts[1] == "s3":
+        return host_parts[0], unquote(key_path)
+    return None
+
+
+def _path_style_s3_location(path: str) -> tuple[str, str]:
+    bucket_and_key = path.split("/", 1)
+    if len(bucket_and_key) != PATH_STYLE_S3_PARTS:
+        raise ValueError("Invalid S3 path-style URL")
+    return bucket_and_key[0], unquote(bucket_and_key[1])
 
 
 def _build_s3_kwargs(bucket: str, key: str) -> dict[str, Any]:
@@ -204,7 +211,7 @@ def _ensure_pdf_object_ready(bucket: str, key: str) -> None:
         metadata = get_s3_client().head_object(**_build_s3_kwargs(bucket, key))
     except ClientError as exc:
         error_code = _client_error_code(exc, default="")
-        if error_code in {"404", "NoSuchKey", "NotFound"}:
+        if error_code in S3_NOT_FOUND_CODES:
             raise UploadNotReadyError(
                 "Uploaded resume not found yet. Please finish the upload and try again."
             ) from exc
@@ -216,21 +223,28 @@ def _ensure_pdf_object_ready(bucket: str, key: str) -> None:
             raise UploadNotReadyError(
                 "Uploaded resume is empty. Please upload a valid PDF and try again."
             )
-        if content_length > MAX_PDF_SIZE:
-            raise ValueError(f"PDF exceeds maximum size of {MAX_PDF_SIZE} bytes")
+        _ensure_pdf_size(content_length)
 
 
 def _download_pdf_bytes(bucket: str, key: str) -> bytes:
     obj = get_s3_client().get_object(**_build_s3_kwargs(bucket, key))
     data = obj["Body"].read()
 
+    _validate_pdf_bytes(data)
+    return data
+
+
+def _ensure_pdf_size(size_bytes: int) -> None:
+    if size_bytes > MAX_PDF_SIZE:
+        raise ValueError(f"PDF exceeds maximum size of {MAX_PDF_SIZE} bytes")
+
+
+def _validate_pdf_bytes(data: bytes) -> None:
     if not data:
         raise ValueError("Downloaded PDF is empty")
-    if len(data) > MAX_PDF_SIZE:
-        raise ValueError(f"PDF exceeds maximum size of {MAX_PDF_SIZE} bytes")
+    _ensure_pdf_size(len(data))
     if not data.startswith(PDF_MAGIC_BYTES):
         raise ValueError("File does not appear to be a valid PDF")
-    return data
 
 
 def _get_secrets_client() -> Any:
@@ -249,16 +263,24 @@ def _extract_google_api_key(secret_value: str) -> str:
     except json.JSONDecodeError:
         return text
 
-    if isinstance(parsed, str) and parsed.strip():
-        return parsed.strip()
-
-    if isinstance(parsed, dict):
-        for field_name in ("GOOGLE_API_KEY", "google_api_key", "api_key"):
-            value = parsed.get(field_name)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+    extracted = _api_key_from_secret_payload(parsed)
+    if extracted:
+        return extracted
 
     raise RuntimeError("Secrets Manager secret does not contain a usable Google API key")
+
+
+def _api_key_from_secret_payload(payload: Any) -> str | None:
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if not isinstance(payload, dict):
+        return None
+
+    for field_name in GOOGLE_API_KEY_FIELDS:
+        value = payload.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _get_google_api_key() -> str:
@@ -387,20 +409,16 @@ def _update_job_status(
     except RuntimeError:
         return
 
-    expression = "SET #status = :status"
+    assignments = ["#status = :status"]
     names = {"#status": "status"}
     values: dict[str, Any] = {":status": status_value}
     condition = "attribute_exists(job_id)"
 
     if analysis_result is not None:
-        expression += ", analysis_result = :result, completed_at = :completed"
-        values[":result"] = analysis_result
-        values[":completed"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        _append_completed_update(assignments, values, analysis_result)
 
     if error:
-        expression += ", #error = :error"
-        names["#error"] = "error"
-        values[":error"] = error
+        _append_error_update(assignments, names, values, error)
 
     if expected_statuses:
         placeholders: list[str] = []
@@ -413,7 +431,7 @@ def _update_job_status(
     try:
         kwargs: dict[str, Any] = {
             "Key": {"job_id": job_id},
-            "UpdateExpression": expression,
+            "UpdateExpression": f"SET {', '.join(assignments)}",
             "ExpressionAttributeNames": names,
             "ExpressionAttributeValues": values,
             "ConditionExpression": condition,
@@ -425,18 +443,46 @@ def _update_job_status(
         logger.exception("Failed to update DynamoDB status")
 
 
+def _append_completed_update(
+    assignments: list[str],
+    values: dict[str, Any],
+    analysis_result: dict[str, Any],
+) -> None:
+    assignments.extend(("analysis_result = :result", "completed_at = :completed"))
+    values.update(
+        {
+            ":result": analysis_result,
+            ":completed": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+    )
+
+
+def _append_error_update(
+    assignments: list[str],
+    names: dict[str, str],
+    values: dict[str, Any],
+    error: str,
+) -> None:
+    assignments.append("#error = :error")
+    names["#error"] = "error"
+    values[":error"] = error
+
+
 def _mark_job_queued(job_id: str) -> bool:
-    try:
-        _update_job_status(job_id, "queued", expected_statuses={"upload_pending", "failed"})
-    except JobTransitionError:
-        return False
-    else:
-        return True
+    return _try_job_status_transition(job_id, "queued", {"upload_pending", "failed"})
 
 
 def _claim_job_for_processing(job_id: str) -> bool:
+    return _try_job_status_transition(job_id, "processing", {"queued"})
+
+
+def _try_job_status_transition(
+    job_id: str,
+    status_value: str,
+    expected_statuses: set[str],
+) -> bool:
     try:
-        _update_job_status(job_id, "processing", expected_statuses={"queued"})
+        _update_job_status(job_id, status_value, expected_statuses=expected_statuses)
     except JobTransitionError:
         return False
     else:
@@ -483,6 +529,19 @@ def _build_status_url(event: dict[str, Any], job_id: str) -> str:
     if host and stage:
         return f"https://{host}/{stage}/status/{job_id}"
     return f"/status/{job_id}"
+
+
+def _error_response(
+    event: dict[str, Any] | None,
+    status_code: int,
+    message: str,
+    *,
+    error_type: str | None = None,
+) -> dict[str, Any]:
+    body = {"error": message}
+    if error_type:
+        body["type"] = error_type
+    return api_response(status_code, body, event=event)
 
 
 def _job_status_response(
@@ -586,24 +645,25 @@ def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
         pdf_bytes = _download_pdf_bytes(bucket, key)
         analysis = analyze_resume_pdf(pdf_bytes, _resolve_job_description({}, job_record))
         _set_job_completed(job_id, analysis)
-    except UploadNotReadyError as exc:
-        _set_job_failed(job_id, str(exc))
-        return {"status": "failed", "error": str(exc)}
-    except ValueError as exc:
-        _set_job_failed(job_id, str(exc))
-        return {"status": "failed", "error": str(exc)}
-    except (
-        AttributeError,
-        BotoCoreError,
-        ClientError,
-        KeyError,
-        RuntimeError,
-        TypeError,
-    ) as exc:
+    except ANALYSIS_INPUT_ERRORS as exc:
+        return _worker_failure(job_id, exc, mark_failed=True)
+    except FAILED_WORKER_EXCEPTIONS as exc:
         _handle_analysis_error(job_id, exc)
-        return {"status": "failed", "error": str(exc)}
+        return _worker_failure(job_id, exc)
     else:
         return {"status": "completed"}
+
+
+def _worker_failure(
+    job_id: str,
+    exc: Exception,
+    *,
+    mark_failed: bool = False,
+) -> dict[str, str]:
+    error = str(exc)
+    if mark_failed:
+        _set_job_failed(job_id, error)
+    return {"status": "failed", "error": error}
 
 
 def _queue_analysis_request(
@@ -616,9 +676,9 @@ def _queue_analysis_request(
         _validate_s3_location(request, job_id, job_record)
     except S3LocationError as exc:
         status_code = 404 if str(exc) == "Job not found" else 400
-        return api_response(status_code, {"error": str(exc)}, event=event)
+        return _error_response(event, status_code, str(exc))
     except ValueError as exc:
-        return api_response(400, {"error": str(exc)}, event=event)
+        return _error_response(event, 400, str(exc))
 
     status = str(job_record.get("status", ""))
     if status == "completed":
@@ -702,40 +762,16 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
 
 def _is_retryable_upstream_error(exc: Exception) -> bool:
     """Detect transient upstream 429/503 errors that should be retried."""
-    status_code = getattr(exc, "status_code", None)
-    code = getattr(exc, "code", None)
-
-    codes = {candidate for candidate in (status_code, code) if candidate is not None}
-    if http.HTTPStatus.SERVICE_UNAVAILABLE in codes:
+    if _retryable_error_code_values(exc) & RETRYABLE_STATUS_CODES:
         return True
-    if http.HTTPStatus.TOO_MANY_REQUESTS in codes:
+    if type(exc).__name__ in RETRYABLE_ERROR_TYPES:
         return True
+    return any(marker in str(exc).lower() for marker in RETRYABLE_MESSAGE_MARKERS)
 
-    normalized_codes = {str(candidate).strip() for candidate in codes}
-    if {"503", "429"} & normalized_codes:
-        return True
 
-    type_name = type(exc).__name__
-    if type_name in {
-        "ServerError",
-        "ServiceUnavailable",
-        "TooManyRequests",
-        "RateLimitError",
-        "ResourceExhausted",
-    }:
-        return True
-
-    message = str(exc).lower()
-    retryable_markers = (
-        "503",
-        "429",
-        "high demand",
-        "service unavailable",
-        "too many requests",
-        "rate limit",
-        "quota",
-    )
-    return any(marker in message for marker in retryable_markers)
+def _retryable_error_code_values(exc: Exception) -> set[Any]:
+    values = (getattr(exc, "status_code", None), getattr(exc, "code", None))
+    return {value for raw in values if raw is not None for value in (raw, str(raw).strip())}
 
 
 def _handle_analysis_error(
@@ -748,23 +784,25 @@ def _handle_analysis_error(
     if isinstance(exc, ClientError):
         code = _client_error_code(exc)
         message = f"S3 access error: {code}"
-        if job_id:
-            _set_job_failed(job_id, message)
-        return api_response(500, {"error": message}, event=event)
+        _fail_job_if_present(job_id, message)
+        return _error_response(event, 500, message)
 
     if _is_retryable_upstream_error(exc):
         message = (
             "Analysis service is temporarily unavailable due to high demand or rate limiting. "
             "Please try again in a few minutes."
         )
-        if job_id:
-            _set_job_failed(job_id, message)
-        return api_response(503, {"error": message, "type": "ServiceUnavailable"}, event=event)
+        _fail_job_if_present(job_id, message)
+        return _error_response(event, 503, message, error_type="ServiceUnavailable")
 
     logger.exception("Analysis handler failed")
+    _fail_job_if_present(job_id, str(exc))
+    return _error_response(event, 500, "Internal server error")
+
+
+def _fail_job_if_present(job_id: str | None, message: str) -> None:
     if job_id:
-        _set_job_failed(job_id, str(exc))
-    return api_response(500, {"error": "Internal server error"}, event=event)
+        _set_job_failed(job_id, message)
 
 
 def _resolve_job_description(request: dict[str, Any], job_record: dict[str, Any]) -> str:
@@ -783,14 +821,14 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
     request, error = _extract_request(event)
     if error:
-        return api_response(400, {"error": error}, event=event)
+        return _error_response(event, 400, error)
 
     if request is None:
-        return api_response(400, {"error": "No body in request"}, event=event)
+        return _error_response(event, 400, "No body in request")
 
     validation_error = _validate_analyze_request(request)
     if validation_error:
-        return api_response(400, {"error": validation_error}, event=event)
+        return _error_response(event, 400, validation_error)
 
     job_id = str(request["job_id"]).strip()
     job_record = _get_job_record(job_id)
