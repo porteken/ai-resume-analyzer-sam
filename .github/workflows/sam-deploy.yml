@@ -16,7 +16,8 @@ env:
   SHARED_REST_API_ID: ${{ vars.SHARED_REST_API_ID || 'tbitqsc1li' }}
   ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS || 'https://ai-resume-analyzer-app-lake.vercel.app,https://ai-resume-analyzer-app-git-dev-portekens-projects.vercel.app' }}
   ENABLE_S3_ACCESS_LOGGING: ${{ vars.ENABLE_S3_ACCESS_LOGGING || 'false' }}
-  PYTHON_VERSION: '3.12'
+  PYTHON_VERSION: '3.14'
+  UV_PYTHON: '3.14'
 
 jobs:
   
@@ -36,6 +37,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
+
+      - name: Install Python
+        run: uv python install "$PYTHON_VERSION"
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@d78e1a4a9656d3b223e59b80676a797f20093133
@@ -92,6 +96,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
+
+      - name: Install Python
+        run: uv python install "$PYTHON_VERSION"
 
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev --no-build
