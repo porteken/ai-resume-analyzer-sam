@@ -28,7 +28,7 @@ CLIENT_CACHE_KEYS = ("dynamodb", "s3", "lambda", "results_table")
 _CLIENT_CACHE: dict[str, Any | None] = dict.fromkeys(CLIENT_CACHE_KEYS)
 
 
-_BOTO_RETRIES: "_RetryDict" = {"max_attempts": 3, "mode": "standard"}
+_BOTO_RETRIES: _RetryDict = {"max_attempts": 3, "mode": "standard"}
 
 _BOTO_CLIENT_CONFIG = Config(
     tcp_keepalive=True,

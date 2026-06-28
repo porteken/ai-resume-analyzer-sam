@@ -12,7 +12,7 @@
         "**/node_modules",
         "**/.*"
     ],
-    "pythonVersion": "3.12",
+    "pythonVersion": "3.14",
     "pythonPlatform": "Linux",
     "typeCheckingMode": "basic",
     "reportMissingImports": false,

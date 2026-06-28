@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-SAM_BUILD_IMAGE="${SAM_BUILD_IMAGE:-public.ecr.aws/sam/build-python3.12:1.136.0}"
+SAM_BUILD_IMAGE="${SAM_BUILD_IMAGE:-public.ecr.aws/sam/build-python3.14:latest}"
 TASK_DIR="$(pwd -P)"
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"

@@ -51,7 +51,7 @@ Conditions:
   UseGoogleApiKeySecretArn: !Not [!Equals [!Ref GoogleApiKeySecretArn, ""]]
 Globals:
   Function:
-    Runtime: python3.12
+    Runtime: python3.14
     Timeout: 10
     MemorySize: 128
     Architectures:
@@ -69,7 +69,7 @@ Resources:
       LayerName: !Sub '${AWS::StackName}-dependencies'
       ContentUri: layers/dependencies/
       CompatibleRuntimes:
-        - python3.12
+        - python3.14
       CompatibleArchitectures:
         - x86_64
 
