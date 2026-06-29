@@ -24,7 +24,7 @@ Parameters:
 
   ExistingApiId:
     Type: String
-    Default: tbitqsc1li
+    Default: ""
     Description: Existing shared API Gateway REST API ID (ai-resume-analyzer).
 
   AllowedOrigins:

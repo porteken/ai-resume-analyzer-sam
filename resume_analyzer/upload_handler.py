@@ -20,13 +20,13 @@ except ImportError:
     _utils = importlib.import_module("utils")
 
 RESUME_BUCKET = _utils.RESUME_BUCKET
+MAX_JOB_DESCRIPTION_LENGTH = _utils.MAX_JOB_DESCRIPTION_LENGTH
 api_response = _utils.api_response
 get_results_table = _utils.get_results_table
 get_s3_client = _utils.get_s3_client
 
 UPLOAD_EXPIRES_SECONDS = int(os.environ.get("UPLOAD_EXPIRES_SECONDS", "900"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
-MAX_JOB_DESCRIPTION_LENGTH = 5000
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             job_description=job_description,
         )
         return _upload_response(event, job_id=job_id, s3_key=s3_key, presigned_post=presigned_post)
-    except (binascii.Error, UnicodeDecodeError):
+    except binascii.Error, UnicodeDecodeError:
         return _error_response(event, 400, "Invalid base64-encoded body")
     except json.JSONDecodeError:
         return _error_response(event, 400, "Invalid JSON format")
@@ -174,9 +174,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         return _error_response(event, 400, str(exc))
     except RuntimeError as exc:
         return _error_response(event, 500, str(exc))
-    except (BotoCoreError, ClientError):
+    except BotoCoreError, ClientError:
         logger.exception("Upload handler failed")
         return _error_response(event, 500, "Internal server error")
-    except (AttributeError, KeyError):
+    except AttributeError, KeyError:
         logger.exception("Unexpected upload handler failure")
         return _error_response(event, 500, "Internal server error")

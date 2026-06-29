@@ -22,6 +22,7 @@ except ImportError:
     _utils = importlib.import_module("utils")
 
 ACCOUNT_ID = _utils.ACCOUNT_ID
+MAX_JOB_DESCRIPTION_LENGTH = _utils.MAX_JOB_DESCRIPTION_LENGTH
 RESUME_BUCKET = _utils.RESUME_BUCKET
 api_response = _utils.api_response
 get_lambda_client = _utils.get_lambda_client
@@ -34,7 +35,6 @@ logger = logging.getLogger(__name__)
 GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
 PDF_MAGIC_BYTES = b"%PDF"
 MAX_PDF_SIZE = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
-MAX_JOB_DESCRIPTION_LENGTH = int(os.environ.get("MAX_JOB_DESCRIPTION_LENGTH", "5000"))
 MAX_GEMINI_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 INTERNAL_WORKER_SOURCE = "resume-analyzer.worker"
@@ -730,10 +730,10 @@ def _get_job_record(job_id: str) -> dict[str, Any]:
         table = get_results_table()
         item = table.get_item(Key={"job_id": job_id}).get("Item")
         return item if isinstance(item, dict) else {}
-    except (BotoCoreError, ClientError, RuntimeError):
+    except BotoCoreError, ClientError, RuntimeError:
         logger.exception("Failed to read DynamoDB job record")
         return {}
-    except (AttributeError, TypeError):
+    except AttributeError, TypeError:
         logger.exception("Unexpected failure reading DynamoDB job record")
         return {}
 
@@ -752,7 +752,7 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
 
         if not isinstance(body, dict):
             return None, "Invalid JSON body"
-    except (binascii.Error, UnicodeDecodeError):
+    except binascii.Error, UnicodeDecodeError:
         return None, "Invalid base64-encoded body"
     except json.JSONDecodeError:
         return None, "Invalid JSON format"

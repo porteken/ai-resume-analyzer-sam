@@ -7,14 +7,14 @@ name = "ai-resume-analyzer-sam"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "boto3" },
-    { name = "boto3-stubs" },
-    { name = "botocore" },
     { name = "google-genai" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "boto3" },
+    { name = "boto3-stubs" },
+    { name = "botocore" },
     { name = "ipython" },
     { name = "moto" },
     { name = "mypy" },
@@ -29,15 +29,13 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.28.0" },
-    { name = "boto3-stubs", specifier = ">=1.43.34" },
-    { name = "botocore", specifier = ">=1.43.34" },
-    { name = "google-genai", specifier = "==1.32.0" },
-]
+requires-dist = [{ name = "google-genai", specifier = "==1.32.0" }]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "boto3", specifier = ">=1.28.0" },
+    { name = "boto3-stubs", specifier = ">=1.43.34" },
+    { name = "botocore", specifier = ">=1.43.34" },
     { name = "ipython", specifier = ">=8.0.0" },
     { name = "moto", specifier = ">=4.0.0" },
     { name = "mypy", specifier = ">=1.0.0" },

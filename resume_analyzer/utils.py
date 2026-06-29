@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 RESULTS_TABLE = os.getenv("RESULTS_TABLE")
+MAX_JOB_DESCRIPTION_LENGTH = int(os.getenv("MAX_JOB_DESCRIPTION_LENGTH", "5000"))
 RESUME_BUCKET = os.getenv("RESUME_BUCKET")
 ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID", "")
 
