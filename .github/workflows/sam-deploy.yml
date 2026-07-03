@@ -660,7 +660,7 @@ jobs:
           API_KEY_ID="$(normalize_id "$(
             aws apigateway get-api-keys \
               --name-query "$API_KEY_NAME" \
-              --include-values false \
+              --no-include-values \
               --query "items[?name=='${API_KEY_NAME}'].id | [0]" \
               --output text
           )")"
