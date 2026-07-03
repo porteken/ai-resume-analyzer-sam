@@ -15,6 +15,11 @@ Parameters:
     Default: ""
     Description: Secrets Manager secret ARN containing the Google Gemini API key.
 
+  GeminiModelId:
+    Type: String
+    Default: gemini-3-flash-preview
+    Description: Google Gemini model ID used for resume analysis.
+
   ApiStageName:
     Type: String
     Default: prod
@@ -290,7 +295,7 @@ Resources:
         Variables:
           GOOGLE_API_KEY: !If [UseGoogleApiKeySecretArn, "", !Ref GoogleApiKey]
           GOOGLE_API_KEY_SECRET_ARN: !Ref GoogleApiKeySecretArn
-          GEMINI_MODEL_ID: gemini-3-flash-preview
+          GEMINI_MODEL_ID: !Ref GeminiModelId
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId

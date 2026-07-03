@@ -40,6 +40,13 @@ find layers/dependencies/python -type f -name "*.pyo" -delete 2>/dev/null || tru
 find layers/dependencies/python -type f -path "*/*.dist-info/RECORD" -delete 2>/dev/null || true
 find layers/dependencies/python -type f -path "*/*.dist-info/WHEEL" -delete 2>/dev/null || true
 
+for forbidden in boto3 botocore; do
+  if [ -d "layers/dependencies/python/${forbidden}" ]; then
+    echo "ERROR: ${forbidden} is bundled in the layer; it is already provided by the Lambda runtime" >&2
+    exit 1
+  fi
+done
+
 echo "Layer size:"
 du -sh layers/dependencies/python
 

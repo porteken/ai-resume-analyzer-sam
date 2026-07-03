@@ -455,29 +455,43 @@ jobs:
             local resource_id="$1"
             local http_method="$2"
             local req_params="${3:-}"
+            local api_key_required="${4:-true}"
 
-            
+
             if aws apigateway get-method \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
-              --http-method "$http_method" >/dev/null 2>&1; then 
+              --http-method "$http_method" >/dev/null 2>&1; then
                 return 0
             fi
 
-            if [[ -n "$req_params" ]]; then
-              aws apigateway put-method \
-                --rest-api-id "$REST_API_ID" \
-                --resource-id "$resource_id" \
-                --http-method "$http_method" \
-                --authorization-type NONE \
-                --request-parameters "$req_params" >/dev/null
+            local put_method_args=(
+              --rest-api-id "$REST_API_ID"
+              --resource-id "$resource_id"
+              --http-method "$http_method"
+              --authorization-type NONE
+            )
+            if [[ "$api_key_required" == "true" ]]; then
+              put_method_args+=(--api-key-required)
             else
-              aws apigateway put-method \
-                --rest-api-id "$REST_API_ID" \
-                --resource-id "$resource_id" \
-                --http-method "$http_method" \
-                --authorization-type NONE >/dev/null
+              put_method_args+=(--no-api-key-required)
             fi
+            if [[ -n "$req_params" ]]; then
+              put_method_args+=(--request-parameters "$req_params")
+            fi
+
+            aws apigateway put-method "${put_method_args[@]}" >/dev/null
+          }
+
+
+          set_api_key_required() {
+            local resource_id="$1"
+            local http_method="$2"
+            aws apigateway update-method \
+              --rest-api-id "$REST_API_ID" \
+              --resource-id "$resource_id" \
+              --http-method "$http_method" \
+              --patch-operations op=replace,path=/apiKeyRequired,value=true >/dev/null
           }
 
           upsert_lambda_proxy_integration() {
@@ -520,22 +534,54 @@ jobs:
               --response-parameters "$response_parameters" >/dev/null
           }
 
+          build_cors_origin_condition() {
+            local condition=""
+            local origin
+            IFS=',' read -ra origins <<< "$ALLOWED_ORIGINS"
+            for origin in "${origins[@]}"; do
+              origin="$(echo "$origin" | xargs)"
+              origin="${origin%/}"
+              [[ -z "$origin" ]] && continue
+              if [[ -n "$condition" ]]; then
+                condition+=" || "
+              fi
+              condition+='$origin == "'"$origin"'"'
+            done
+            echo "$condition"
+          }
+
           upsert_cors_integration_response() {
             local resource_id="$1"
             local response_parameters
-            response_parameters="{\"method.response.header.Access-Control-Allow-Headers\":\"'Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key'\",\"method.response.header.Access-Control-Allow-Methods\":\"'OPTIONS,GET,POST'\",\"method.response.header.Access-Control-Allow-Origin\":\"'*'\"}"
+            response_parameters='{"method.response.header.Access-Control-Allow-Headers":"'"'"'Content-Type,Authorization,X-Amz-Date,X-Amz-Security-Token,X-Api-Key'"'"'","method.response.header.Access-Control-Allow-Methods":"'"'"'OPTIONS,GET,POST'"'"'"}'
+
+            local origin_condition
+            origin_condition="$(build_cors_origin_condition)"
+
+
+
+            local vtl_template
+            vtl_template='#set($origin = $input.params("Origin"))
+            #if($origin == "")#set($origin = $input.params("origin"))#end
+            #if('"$origin_condition"')
+            #set($context.responseOverride.header.Access-Control-Allow-Origin = $origin)
+            #end'
+
+            local response_templates
+            response_templates="$(jq -n --arg t "$vtl_template" '{"application/json": $t}')"
 
             aws apigateway put-integration-response \
               --rest-api-id "$REST_API_ID" \
               --resource-id "$resource_id" \
               --http-method OPTIONS \
               --status-code 200 \
-              --response-parameters "$response_parameters" >/dev/null
+              --response-parameters "$response_parameters" \
+              --response-templates "$response_templates" >/dev/null
           }
 
           ensure_cors_options() {
             local resource_id="$1"
-            ensure_method_exists "$resource_id" OPTIONS
+            ensure_method_exists "$resource_id" OPTIONS "" "false"
 
             aws apigateway put-integration \
               --rest-api-id "$REST_API_ID" \
@@ -563,19 +609,80 @@ jobs:
           STATUS_PARENT_RESOURCE_ID="$(ensure_child_resource "$ROOT_RESOURCE_ID" status)"
           STATUS_RESOURCE_ID="$(ensure_child_resource "$STATUS_PARENT_RESOURCE_ID" '{job_id}')"
 
-          
+
           upsert_lambda_proxy_integration "$UPLOAD_RESOURCE_ID" POST "$UPLOAD_FN"
           upsert_lambda_proxy_integration "$ANALYZE_RESOURCE_ID" POST "$ANALYZE_FN"
-          
+
           ensure_method_exists "$STATUS_RESOURCE_ID" GET "method.request.path.job_id=true"
           upsert_lambda_proxy_integration "$STATUS_RESOURCE_ID" GET "$STATUS_FN"
 
-          
+
+
+
+          set_api_key_required "$UPLOAD_RESOURCE_ID" POST
+          set_api_key_required "$ANALYZE_RESOURCE_ID" POST
+          set_api_key_required "$STATUS_RESOURCE_ID" GET
+
+
           ensure_cors_options "$UPLOAD_RESOURCE_ID"
           ensure_cors_options "$ANALYZE_RESOURCE_ID"
           ensure_cors_options "$STATUS_RESOURCE_ID"
 
-          
+
+
+
+          USAGE_PLAN_NAME="ResumeAnalyzerUsagePlan"
+          API_KEY_NAME="ResumeAnalyzerApiKey"
+
+          USAGE_PLAN_ID="$(normalize_id "$(
+            aws apigateway get-usage-plans \
+              --query "items[?name=='${USAGE_PLAN_NAME}'].id | [0]" \
+              --output text
+          )")"
+
+          if [[ -z "$USAGE_PLAN_ID" ]]; then
+            USAGE_PLAN_ID="$(aws apigateway create-usage-plan \
+              --name "$USAGE_PLAN_NAME" \
+              --query 'id' --output text)"
+          fi
+
+          STAGE_ATTACHED_COUNT="$(aws apigateway get-usage-plan \
+            --usage-plan-id "$USAGE_PLAN_ID" \
+            --query "length(apiStages[?apiId=='${REST_API_ID}' && stage=='${API_STAGE_NAME}'])" \
+            --output text)"
+
+          if [[ "$STAGE_ATTACHED_COUNT" == "0" ]]; then
+            aws apigateway update-usage-plan \
+              --usage-plan-id "$USAGE_PLAN_ID" \
+              --patch-operations "op=add,path=/apiStages,value=${REST_API_ID}:${API_STAGE_NAME}" >/dev/null
+          fi
+
+          API_KEY_ID="$(normalize_id "$(
+            aws apigateway get-api-keys \
+              --name-query "$API_KEY_NAME" \
+              --include-values false \
+              --query "items[?name=='${API_KEY_NAME}'].id | [0]" \
+              --output text
+          )")"
+
+          if [[ -z "$API_KEY_ID" ]]; then
+            echo "::error::API key '${API_KEY_NAME}' not found in API Gateway. Create it manually (it must match the frontend's configured x-api-key value) before this workflow can attach it to the usage plan."
+            exit 1
+          fi
+
+          KEY_ATTACHED_COUNT="$(aws apigateway get-usage-plan-keys \
+            --usage-plan-id "$USAGE_PLAN_ID" \
+            --query "length(items[?id=='${API_KEY_ID}'])" \
+            --output text)"
+
+          if [[ "$KEY_ATTACHED_COUNT" == "0" ]]; then
+            aws apigateway create-usage-plan-key \
+              --usage-plan-id "$USAGE_PLAN_ID" \
+              --key-id "$API_KEY_ID" \
+              --key-type API_KEY >/dev/null
+          fi
+
+
           aws apigateway create-deployment \
             --rest-api-id "$REST_API_ID" \
             --stage-name "$API_STAGE_NAME" \
