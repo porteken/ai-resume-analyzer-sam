@@ -25,15 +25,23 @@ def _origin_set(raw_origins: str) -> set[str]:
 
 CORS_ALLOWED_ORIGINS = _origin_set(os.getenv("CORS_ALLOWED_ORIGINS", ""))
 
-CLIENT_CACHE_KEYS = ("dynamodb", "s3", "lambda", "results_table")
+CLIENT_CACHE_KEYS = ("dynamodb", "s3", "lambda", "secretsmanager", "results_table")
 _CLIENT_CACHE: dict[str, Any | None] = dict.fromkeys(CLIENT_CACHE_KEYS)
 
 
 _BOTO_RETRIES: _RetryDict = {"max_attempts": 3, "mode": "standard"}
 
+# Explicit socket timeouts: botocore defaults to 60s for both, which is longer
+# than the 10s Timeout on the API-path functions, so a stalled AWS call would
+# burn the whole Lambda budget instead of failing fast enough to retry.
+AWS_CONNECT_TIMEOUT = float(os.getenv("AWS_CONNECT_TIMEOUT", "3"))
+AWS_READ_TIMEOUT = float(os.getenv("AWS_READ_TIMEOUT", "10"))
+
 _BOTO_CLIENT_CONFIG = Config(
     tcp_keepalive=True,
     retries=_BOTO_RETRIES,
+    connect_timeout=AWS_CONNECT_TIMEOUT,
+    read_timeout=AWS_READ_TIMEOUT,
 )
 
 
@@ -50,6 +58,11 @@ def get_s3_client() -> Any:
 def get_lambda_client() -> Any:
     """Lazily initialize and return the Lambda client."""
     return _cached_aws("lambda", boto3.client, "lambda")
+
+
+def get_secrets_client() -> Any:
+    """Lazily initialize and return the Secrets Manager client."""
+    return _cached_aws("secretsmanager", boto3.client, "secretsmanager")
 
 
 def _cached_aws(cache_key: str, factory: Any, service_name: str) -> Any:

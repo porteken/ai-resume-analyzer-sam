@@ -81,9 +81,7 @@ def lambda_function_module(
     mock_secrets_client.get_secret_value.return_value = {
         "SecretString": json.dumps({"GOOGLE_API_KEY": "test-api-key-123"})
     }
-    monkeypatch.setattr(
-        lambda_function.boto3, "client", MagicMock(return_value=mock_secrets_client)
-    )
+    monkeypatch.setattr(lambda_function, "get_secrets_client", lambda: mock_secrets_client)
 
     mock_client = MagicMock()
     mock_response = MagicMock()
@@ -546,11 +544,7 @@ class TestGeminiAnalysis:
         )
 
         lambda_function_module.reset_cached_clients()
-        monkeypatch.setattr(
-            lambda_function_module.boto3,
-            "client",
-            MagicMock(return_value=secret_client),
-        )
+        monkeypatch.setattr(lambda_function_module, "get_secrets_client", lambda: secret_client)
 
         lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
 

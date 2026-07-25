@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 try:
@@ -27,6 +26,7 @@ api_response = _utils.api_response
 get_lambda_client = _utils.get_lambda_client
 get_results_table = _utils.get_results_table
 get_s3_client = _utils.get_s3_client
+get_secrets_client = _utils.get_secrets_client
 normalize_analysis_result = _utils.normalize_analysis_result
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,6 @@ def _ensure_genai_imported() -> None:
 CLIENT_CACHE_KEYS = (
     "genai_client",
     "genai_client_api_key",
-    "secrets_client",
     "cached_secret_arn",
     "cached_google_api_key",
 )
@@ -85,8 +84,9 @@ _CLIENT_CACHE: dict[str, Any | str | None] = dict.fromkeys(CLIENT_CACHE_KEYS)
 
 
 def reset_cached_clients() -> None:
-    """Reset cached Gemini and Secrets Manager clients used by tests."""
+    """Reset cached Gemini clients and the resolved API key used by tests."""
     _CLIENT_CACHE.update(dict.fromkeys(CLIENT_CACHE_KEYS))
+    _utils.reset_cached_clients()
 
 
 STRING_FIELDS = ("name", "summary")
@@ -271,12 +271,6 @@ def _validate_pdf_bytes(data: bytes) -> None:
         raise ValueError("File does not appear to be a valid PDF")
 
 
-def _get_secrets_client() -> Any:
-    if _CLIENT_CACHE["secrets_client"] is None:
-        _CLIENT_CACHE["secrets_client"] = boto3.client("secretsmanager")
-    return _CLIENT_CACHE["secrets_client"]
-
-
 def _extract_google_api_key(secret_value: str) -> str:
     text = secret_value.strip()
     if not text:
@@ -314,7 +308,7 @@ def _get_google_api_key() -> str:
             _CLIENT_CACHE["cached_google_api_key"] is None
             or _CLIENT_CACHE["cached_secret_arn"] != secret_arn
         ):
-            response = _get_secrets_client().get_secret_value(SecretId=secret_arn)
+            response = get_secrets_client().get_secret_value(SecretId=secret_arn)
             secret_string = str(response.get("SecretString") or "")
             _CLIENT_CACHE["cached_google_api_key"] = _extract_google_api_key(secret_string)
             _CLIENT_CACHE["cached_secret_arn"] = secret_arn
@@ -459,7 +453,7 @@ def analyze_resume_pdf(
             break
         except Exception as exc:
             if _is_retryable_upstream_error(exc) and attempt < MAX_GEMINI_RETRIES - 1:
-                delay = RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                delay = RETRY_BASE_DELAY_SECONDS * 2**attempt
                 logger.warning(
                     "Gemini request hit a retryable upstream error; "
                     "retrying in %.1fs (attempt %d/%d)",
