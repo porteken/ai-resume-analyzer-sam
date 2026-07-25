@@ -20,6 +20,34 @@ class FakeGenerateContentConfig:
         self.__dict__.update(kwargs)
 
 
+class FakeThinkingConfig:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
+class FakeHttpOptions:
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _FakeEnumLookup:
+    """Duck-typed stand-in for a google.genai enum.
+
+    Both `Enum["MEMBER"]` and `Enum.MEMBER` return the member name unchanged,
+    which is all the production code needs to compare against.
+    """
+
+    def __getitem__(self, key: str) -> str:
+        return key
+
+    def __getattr__(self, name: str) -> str:
+        return name
+
+
+FAKE_THINKING_LEVEL = _FakeEnumLookup()
+FAKE_FINISH_REASON = _FakeEnumLookup()
+
+
 class FakeTypes:
     def __getattr__(self, name: str) -> Any:
         """Return fake google.genai.types members used by tests."""
@@ -27,6 +55,14 @@ class FakeTypes:
             return FakePart
         if name == "GenerateContentConfig":
             return FakeGenerateContentConfig
+        if name == "ThinkingConfig":
+            return FakeThinkingConfig
+        if name == "HttpOptions":
+            return FakeHttpOptions
+        if name == "ThinkingLevel":
+            return FAKE_THINKING_LEVEL
+        if name == "FinishReason":
+            return FAKE_FINISH_REASON
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
 
@@ -34,6 +70,10 @@ _fake_genai_module: Any = ModuleType("google.genai")
 _fake_types_module: Any = ModuleType("google.genai.types")
 _fake_types_module.Part = FakePart
 _fake_types_module.GenerateContentConfig = FakeGenerateContentConfig
+_fake_types_module.ThinkingConfig = FakeThinkingConfig
+_fake_types_module.HttpOptions = FakeHttpOptions
+_fake_types_module.ThinkingLevel = FAKE_THINKING_LEVEL
+_fake_types_module.FinishReason = FAKE_FINISH_REASON
 _fake_genai_module.types = _fake_types_module
 _fake_genai_module.Client = MagicMock()
 sys.modules["google.genai"] = _fake_genai_module
@@ -204,4 +244,5 @@ def mock_lambda_context() -> MagicMock:
     context.aws_request_id = "test-request-id"
     context.log_group_name = "/aws/lambda/test-function"
     context.log_stream_name = "2026/02/21/[$LATEST]abcd1234"
+    context.get_remaining_time_in_millis.return_value = 85_000
     return context

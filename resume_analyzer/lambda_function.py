@@ -14,7 +14,6 @@ from urllib.parse import unquote, urlparse
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from google.genai import Client, types
 
 try:
     _utils = importlib.import_module("resume_analyzer.utils")
@@ -33,11 +32,46 @@ normalize_analysis_result = _utils.normalize_analysis_result
 logger = logging.getLogger(__name__)
 
 GEMINI_MODEL_ID = os.environ.get("GEMINI_MODEL_ID", "gemini-3-flash-preview")
+GEMINI_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "").strip().upper()
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
 PDF_MAGIC_BYTES = b"%PDF"
 MAX_PDF_SIZE = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 MAX_GEMINI_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 INTERNAL_WORKER_SOURCE = "resume-analyzer.worker"
+
+# How much of the Lambda's remaining wall-clock time to always hold back so a
+# failed/hung Gemini call still leaves room for _set_job_failed to run before
+# the container is killed at the function Timeout.
+GEMINI_TIMEOUT_FLOOR_MS = 5_000
+MIN_GEMINI_TIMEOUT_MS = 3_000
+DEFAULT_GEMINI_TIMEOUT_MS = 60_000
+
+# Response list-length caps, enforced via JSON-schema maxItems so the model
+# cannot generate an unbounded reply. Output tokens are generated serially,
+# so this directly bounds latency.
+MAX_LIST_ITEMS = 8
+MAX_EXPERIENCE_ENTRIES = 6
+MAX_EDUCATION_ENTRIES = 4
+MAX_HIGHLIGHTS_PER_ROLE = 5
+
+# google.genai pulls in pydantic/httpx/google.auth/cryptography (~1s import
+# cost) but is only needed on the worker path, not the synchronous /analyze
+# API path that just queues the job. Deferring the import means a cold start
+# whose first invocation is the API path never pays for it.
+Client: Any = None
+types: Any = None
+
+
+def _ensure_genai_imported() -> None:
+    global Client, types  # noqa: PLW0603
+    if Client is None:
+        from google.genai import Client as _Client  # noqa: PLC0415
+        from google.genai import types as _types  # noqa: PLC0415
+
+        Client = _Client
+        types = _types
+
 
 CLIENT_CACHE_KEYS = (
     "genai_client",
@@ -66,8 +100,8 @@ def _string_schema() -> dict[str, str]:
     return {"type": "string"}
 
 
-def _string_list_schema() -> dict[str, Any]:
-    return {"type": "array", "items": _string_schema()}
+def _string_list_schema(max_items: int) -> dict[str, Any]:
+    return {"type": "array", "items": _string_schema(), "maxItems": max_items}
 
 
 def _object_schema(properties: dict[str, Any]) -> dict[str, Any]:
@@ -79,8 +113,8 @@ def _object_schema(properties: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _object_list_schema(properties: dict[str, Any]) -> dict[str, Any]:
-    return {"type": "array", "items": _object_schema(properties)}
+def _object_list_schema(properties: dict[str, Any], max_items: int) -> dict[str, Any]:
+    return {"type": "array", "items": _object_schema(properties), "maxItems": max_items}
 
 
 def _analysis_response_schema() -> dict[str, Any]:
@@ -88,15 +122,17 @@ def _analysis_response_schema() -> dict[str, Any]:
     properties["contact_info"] = _object_schema(
         {field: _string_schema() for field in CONTACT_FIELDS}
     )
-    properties.update({field: _string_list_schema() for field in STRING_LIST_FIELDS})
+    properties.update({field: _string_list_schema(MAX_LIST_ITEMS) for field in STRING_LIST_FIELDS})
     properties["experience"] = _object_list_schema(
         {
             **{field: _string_schema() for field in EXPERIENCE_FIELDS},
-            "highlights": _string_list_schema(),
-        }
+            "highlights": _string_list_schema(MAX_HIGHLIGHTS_PER_ROLE),
+        },
+        MAX_EXPERIENCE_ENTRIES,
     )
     properties["education"] = _object_list_schema(
-        {field: _string_schema() for field in EDUCATION_FIELDS}
+        {field: _string_schema() for field in EDUCATION_FIELDS},
+        MAX_EDUCATION_ENTRIES,
     )
     return _object_schema(properties)
 
@@ -206,9 +242,9 @@ def _build_s3_kwargs(bucket: str, key: str) -> dict[str, Any]:
     return kwargs
 
 
-def _ensure_pdf_object_ready(bucket: str, key: str) -> None:
+def _download_pdf_bytes(bucket: str, key: str) -> bytes:
     try:
-        metadata = get_s3_client().head_object(**_build_s3_kwargs(bucket, key))
+        obj = get_s3_client().get_object(**_build_s3_kwargs(bucket, key))
     except ClientError as exc:
         error_code = _client_error_code(exc, default="")
         if error_code in S3_NOT_FOUND_CODES:
@@ -217,19 +253,7 @@ def _ensure_pdf_object_ready(bucket: str, key: str) -> None:
             ) from exc
         raise
 
-    content_length = metadata.get("ContentLength")
-    if isinstance(content_length, int):
-        if content_length <= 0:
-            raise UploadNotReadyError(
-                "Uploaded resume is empty. Please upload a valid PDF and try again."
-            )
-        _ensure_pdf_size(content_length)
-
-
-def _download_pdf_bytes(bucket: str, key: str) -> bytes:
-    obj = get_s3_client().get_object(**_build_s3_kwargs(bucket, key))
     data = obj["Body"].read()
-
     _validate_pdf_bytes(data)
     return data
 
@@ -308,6 +332,7 @@ def _get_google_api_key() -> str:
 
 
 def _get_genai_client() -> Any:
+    _ensure_genai_imported()
     api_key = _get_google_api_key()
     if _CLIENT_CACHE["genai_client"] is None or _CLIENT_CACHE["genai_client_api_key"] != api_key:
         _CLIENT_CACHE["genai_client"] = Client(api_key=api_key)
@@ -315,13 +340,17 @@ def _get_genai_client() -> Any:
     return _CLIENT_CACHE["genai_client"]
 
 
-def _build_analysis_prompt(job_description: str) -> str:
+def _build_system_instruction() -> str:
     return (
         "You are an expert technical recruiter and resume analyst. "
-        "Analyze this resume PDF against the provided job description and return JSON only "
-        "that exactly matches the supplied schema. "
+        "Analyze the attached resume PDF against the provided job description and return JSON "
+        "only that exactly matches the supplied schema. "
         "Use empty strings or empty arrays when the resume does not provide enough evidence. "
-        "Do not invent qualifications, employers, dates, education history, or certifications.\n\n"
+        "Do not invent qualifications, employers, dates, education history, or certifications. "
+        f"Limit skills, strengths, gaps, and recommendations to at most {MAX_LIST_ITEMS} concise "
+        f"entries each, experience to at most {MAX_EXPERIENCE_ENTRIES} roles with at most "
+        f"{MAX_HIGHLIGHTS_PER_ROLE} highlights per role, and education to at most "
+        f"{MAX_EDUCATION_ENTRIES} entries. Keep every entry to one concise line.\n\n"
         "Field guidance:\n"
         "- name: candidate full name.\n"
         "- contact_info: email, phone, location, linkedin URL when available.\n"
@@ -331,20 +360,85 @@ def _build_analysis_prompt(job_description: str) -> str:
         "- education: institution, degree, field, and graduation date for each entry.\n"
         "- strengths: concrete ways the resume matches the job description.\n"
         "- gaps: missing or weak evidence relative to the job description.\n"
-        "- recommendations: specific next steps tailored to this candidate and role.\n\n"
-        f"Job Description:\n{job_description}"
+        "- recommendations: specific next steps tailored to this candidate and role."
     )
 
 
-def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]:
+def _build_analysis_prompt(job_description: str) -> str:
+    return f"Job Description:\n{job_description}"
+
+
+def _resolve_gemini_timeout_ms(context: Any) -> int:
+    """Bound the per-attempt HTTP timeout by the Lambda's actual remaining time.
+
+    Without this, an unset httpx timeout lets a single hung attempt burn the
+    entire function Timeout, killing the container before a failure can be
+    recorded and stranding the job at "processing" until DynamoDB TTL expiry.
+    """
+    get_remaining = getattr(context, "get_remaining_time_in_millis", None)
+    if get_remaining is None:
+        return DEFAULT_GEMINI_TIMEOUT_MS
+    try:
+        remaining_ms = int(get_remaining())
+    except TypeError, ValueError:
+        return DEFAULT_GEMINI_TIMEOUT_MS
+    return max(remaining_ms - GEMINI_TIMEOUT_FLOOR_MS, MIN_GEMINI_TIMEOUT_MS)
+
+
+def _resolve_thinking_config() -> Any | None:
+    """Build a ThinkingConfig from GEMINI_THINKING_LEVEL, or None to keep the model default.
+
+    Left unset by default so upgrading the SDK does not silently change
+    output quality; set the env var once A/B results justify a level.
+    """
+    if not GEMINI_THINKING_LEVEL:
+        return None
+    _ensure_genai_imported()
+    try:
+        level = types.ThinkingLevel[GEMINI_THINKING_LEVEL]
+    except KeyError as exc:
+        raise RuntimeError(f"Invalid GEMINI_THINKING_LEVEL: {GEMINI_THINKING_LEVEL!r}") from exc
+    return types.ThinkingConfig(thinking_level=level)
+
+
+def _log_gemini_usage(response: Any) -> None:
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    logger.info(
+        "Gemini usage: prompt_tokens=%s thoughts_tokens=%s output_tokens=%s total_tokens=%s",
+        getattr(usage, "prompt_token_count", None),
+        getattr(usage, "thoughts_token_count", None),
+        getattr(usage, "candidates_token_count", None),
+        getattr(usage, "total_token_count", None),
+    )
+
+
+def _raise_if_truncated(response: Any) -> None:
+    candidates = getattr(response, "candidates", None) or []
+    finish_reason = candidates[0].finish_reason if candidates else None
+    if finish_reason == types.FinishReason.MAX_TOKENS:
+        raise RuntimeError(
+            "Gemini response was truncated by max_output_tokens="
+            f"{GEMINI_MAX_OUTPUT_TOKENS}; raise GEMINI_MAX_OUTPUT_TOKENS or tighten the "
+            "response schema's maxItems limits."
+        )
+
+
+def analyze_resume_pdf(
+    pdf_bytes: bytes,
+    job_description: str,
+    context: Any = None,
+) -> dict[str, Any]:
     """Call Gemini 3 Flash Preview with native PDF input and strict JSON schema output."""
-    response_schema = RESUME_ANALYSIS_RESPONSE_SCHEMA
+    _ensure_genai_imported()
     prompt = _build_analysis_prompt(job_description)
-    contents = [
-        types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-        prompt,
-    ]
+    # Static instructions live in system_instruction; PDF stays last in contents
+    # so the (currently short, non-cacheable) static prefix precedes the large
+    # variable payload if the request ever grows past implicit-caching thresholds.
+    contents = [prompt, types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")]
     del pdf_bytes
+    thinking_config = _resolve_thinking_config()
 
     response: Any | None = None
     for attempt in range(MAX_GEMINI_RETRIES):
@@ -353,9 +447,13 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
                 model=GEMINI_MODEL_ID,
                 contents=contents,
                 config=types.GenerateContentConfig(
+                    system_instruction=_build_system_instruction(),
                     response_mime_type="application/json",
-                    response_json_schema=response_schema,
+                    response_json_schema=RESUME_ANALYSIS_RESPONSE_SCHEMA,
                     temperature=0.2,
+                    max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
+                    thinking_config=thinking_config,
+                    http_options=types.HttpOptions(timeout=_resolve_gemini_timeout_ms(context)),
                 ),
             )
             break
@@ -376,6 +474,9 @@ def analyze_resume_pdf(pdf_bytes: bytes, job_description: str) -> dict[str, Any]
     if response is None:
         raise RuntimeError("Gemini did not return a response")
 
+    _log_gemini_usage(response)
+    _raise_if_truncated(response)
+
     text = getattr(response, "text", None)
     if not isinstance(text, str) or not text:
         raise RuntimeError("Gemini returned an empty response")
@@ -393,13 +494,14 @@ def _conditional_check_failed(exc: Exception) -> bool:
     )
 
 
-def _update_job_status(
+def _update_job_status(  # noqa: PLR0913
     job_id: str | None,
     status_value: str,
     analysis_result: dict[str, Any] | None = None,
     error: str | None = None,
     *,
     expected_statuses: set[str] | None = None,
+    job_description: str | None = None,
 ) -> None:
     if not job_id:
         return
@@ -419,6 +521,10 @@ def _update_job_status(
 
     if error:
         _append_error_update(assignments, names, values, error)
+
+    if job_description is not None:
+        assignments.append("job_description = :job_description")
+        values[":job_description"] = job_description
 
     if expected_statuses:
         placeholders: list[str] = []
@@ -468,8 +574,10 @@ def _append_error_update(
     values[":error"] = error
 
 
-def _mark_job_queued(job_id: str) -> bool:
-    return _try_job_status_transition(job_id, "queued", {"upload_pending", "failed"})
+def _mark_job_queued(job_id: str, job_description: str | None = None) -> bool:
+    return _try_job_status_transition(
+        job_id, "queued", {"upload_pending", "failed"}, job_description=job_description
+    )
 
 
 def _claim_job_for_processing(job_id: str) -> bool:
@@ -480,9 +588,16 @@ def _try_job_status_transition(
     job_id: str,
     status_value: str,
     expected_statuses: set[str],
+    *,
+    job_description: str | None = None,
 ) -> bool:
     try:
-        _update_job_status(job_id, status_value, expected_statuses=expected_statuses)
+        _update_job_status(
+            job_id,
+            status_value,
+            expected_statuses=expected_statuses,
+            job_description=job_description,
+        )
     except JobTransitionError:
         return False
     else:
@@ -565,10 +680,6 @@ def _job_status_response(
     )
 
 
-def _refresh_job_record(job_id: str) -> dict[str, Any]:
-    return _get_job_record(job_id)
-
-
 class S3LocationError(Exception):
     """Raised when S3 location cannot be resolved from the request."""
 
@@ -628,7 +739,7 @@ def _parse_worker_event(event: dict[str, Any]) -> str | None:
     return None
 
 
-def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
+def _handle_worker_event(event: dict[str, Any], context: Any) -> dict[str, Any]:
     job_id = str(event["job_id"])
     job_record = _get_job_record(job_id)
     if not job_record:
@@ -641,9 +752,8 @@ def _handle_worker_event(event: dict[str, Any]) -> dict[str, Any]:
 
     try:
         bucket, key = _validate_s3_location({}, job_id, job_record)
-        _ensure_pdf_object_ready(bucket, key)
         pdf_bytes = _download_pdf_bytes(bucket, key)
-        analysis = analyze_resume_pdf(pdf_bytes, _resolve_job_description({}, job_record))
+        analysis = analyze_resume_pdf(pdf_bytes, _resolve_job_description({}, job_record), context)
         _set_job_completed(job_id, analysis)
     except ANALYSIS_INPUT_ERRORS as exc:
         return _worker_failure(job_id, exc, mark_failed=True)
@@ -698,11 +808,11 @@ def _queue_analysis_request(
             message="Analysis already queued",
         )
 
-    queued = _mark_job_queued(job_id)
-    refreshed = _refresh_job_record(job_id) or {**job_record, "status": "queued"}
+    job_description = str(request["job_description"]) if "job_description" in request else None
+    queued = _mark_job_queued(job_id, job_description=job_description)
+    refreshed = {**job_record, "status": "queued"}
     if queued:
         _invoke_worker(job_id)
-        refreshed["status"] = "queued"
 
     return _job_status_response(
         event,
@@ -813,11 +923,11 @@ def _resolve_job_description(request: dict[str, Any], job_record: dict[str, Any]
     return "General resume analysis"
 
 
-def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda handler for queuing and executing resume analysis."""
     worker_job_id = _parse_worker_event(event)
     if worker_job_id:
-        return _handle_worker_event(event)
+        return _handle_worker_event(event, context)
 
     request, error = _extract_request(event)
     if error:

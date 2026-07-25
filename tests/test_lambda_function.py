@@ -188,11 +188,15 @@ class TestGeminiAnalysis:
         assert "education" in config.response_json_schema["properties"]
         assert "strengths" in config.response_json_schema["properties"]
         assert "recommendations" in config.response_json_schema["properties"]
+        assert "education" in config.system_instruction.lower()
 
-        prompt = call_args["contents"][1]
+        prompt = call_args["contents"][0]
         assert "Job Description" in prompt
-        assert "education" in prompt.lower()
         assert TEST_JOB_DESCRIPTION in prompt
+        assert call_args["contents"][1] == {
+            "data": b"%PDF-1.4\nmock pdf bytes\n%%EOF",
+            "mime_type": "application/pdf",
+        }
 
     def test_analyze_backfills_missing_strengths_gaps_and_recommendations(
         self,
@@ -371,7 +375,7 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         set_job_record(mock_boto3_clients)
-        error = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        error = ClientError({"Error": {"Code": "InternalError"}}, "GetObject")
         lambda_function_module.get_s3_client().get_object.side_effect = error
 
         response = lambda_function_module.lambda_handler(
@@ -379,7 +383,7 @@ class TestGeminiAnalysis:
             mock_lambda_context,
         )
         assert response["status"] == "failed"
-        assert "NoSuchKey" in response["error"]
+        assert "InternalError" in response["error"]
 
     def test_parse_s3_url_variants(self, lambda_function_module: Any) -> None:
         bucket, key = lambda_function_module._parse_s3_url(
@@ -686,9 +690,9 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         set_job_record(mock_boto3_clients)
-        lambda_function_module.get_s3_client().head_object.side_effect = ClientError(
-            {"Error": {"Code": "404"}},
-            "HeadObject",
+        lambda_function_module.get_s3_client().get_object.side_effect = ClientError(
+            {"Error": {"Code": "NoSuchKey"}},
+            "GetObject",
         )
 
         response = lambda_function_module.lambda_handler(

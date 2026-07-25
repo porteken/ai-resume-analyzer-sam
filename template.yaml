@@ -20,6 +20,17 @@ Parameters:
     Default: gemini-3-flash-preview
     Description: Google Gemini model ID used for resume analysis.
 
+  GeminiThinkingLevel:
+    Type: String
+    Default: ""
+    AllowedValues:
+      - ""
+      - MINIMAL
+      - LOW
+      - MEDIUM
+      - HIGH
+    Description: Optional Gemini 3 thinking_level override. Left empty, the model uses its own default (HIGH); measure latency/quality before lowering it.
+
   ApiStageName:
     Type: String
     Default: prod
@@ -296,6 +307,7 @@ Resources:
           GOOGLE_API_KEY: !If [UseGoogleApiKeySecretArn, "", !Ref GoogleApiKey]
           GOOGLE_API_KEY_SECRET_ARN: !Ref GoogleApiKeySecretArn
           GEMINI_MODEL_ID: !Ref GeminiModelId
+          GEMINI_THINKING_LEVEL: !Ref GeminiThinkingLevel
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
@@ -307,6 +319,9 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-StatusFunction'
       CodeUri: resume_analyzer/
       Handler: status_handler.lambda_handler
+      # This is the most frequently invoked endpoint (polled every 1-5s per
+      # analysis); more memory buys more vCPU to serialize the response faster.
+      MemorySize: 512
       Environment:
         Variables:
           RESULTS_TABLE: !Ref ResultsTable

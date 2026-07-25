@@ -5,7 +5,7 @@ description = "Serverless resume analysis backend using AWS Lambda, S3, DynamoDB
 readme = "README.md"
 requires-python = "~=3.14.0"
 dependencies = [
-    "google-genai==1.32.0",
+    "google-genai==2.14.0",
 ]
 
 [dependency-groups]
