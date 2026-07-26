@@ -319,8 +319,6 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-StatusFunction'
       CodeUri: resume_analyzer/
       Handler: status_handler.lambda_handler
-      # This is the most frequently invoked endpoint (polled every 1-5s per
-      # analysis); more memory buys more vCPU to serialize the response faster.
       MemorySize: 512
       Environment:
         Variables:

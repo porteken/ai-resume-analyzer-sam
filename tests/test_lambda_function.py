@@ -2,6 +2,7 @@
 
 import base64
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -49,6 +50,11 @@ def worker_event(lambda_function_module: Any, job_id: str = TEST_JOB_ID) -> dict
     return {"source": lambda_function_module.INTERNAL_WORKER_SOURCE, "job_id": job_id}
 
 
+def genai_client(lambda_function_module: Any) -> MagicMock:
+    """Return the fake google.genai Client patched into the module under test."""
+    return lambda_function_module._genai().Client
+
+
 def update_statuses(mock_boto3_clients: dict[str, Any]) -> list[str]:
     """Return status values sent through DynamoDB update calls."""
     return [
@@ -68,9 +74,6 @@ def lambda_function_module(
     original_get_results_table = lambda_function.get_results_table
     original_get_s3_client = lambda_function.get_s3_client
     original_get_lambda_client = lambda_function.get_lambda_client
-    original_client_class = lambda_function.Client
-    original_types = lambda_function.types
-
     set_job_record(mock_boto3_clients, status="upload_pending")
 
     lambda_function.get_s3_client = lambda: mock_boto3_clients["s3"]
@@ -112,8 +115,8 @@ def lambda_function_module(
     )
     mock_client.models.generate_content.return_value = mock_response
 
-    lambda_function.Client = MagicMock(return_value=mock_client)
-    lambda_function.types = FakeTypes()
+    fake_genai = SimpleNamespace(Client=MagicMock(return_value=mock_client), types=FakeTypes())
+    monkeypatch.setitem(lambda_function._GENAI_MODULE_CACHE, "module", fake_genai)
     lambda_function.reset_cached_clients()
 
     try:
@@ -123,8 +126,6 @@ def lambda_function_module(
         lambda_function.get_results_table = original_get_results_table
         lambda_function.get_s3_client = original_get_s3_client
         lambda_function.get_lambda_client = original_get_lambda_client
-        lambda_function.Client = original_client_class
-        lambda_function.types = original_types
         lambda_function.reset_cached_clients()
 
 
@@ -177,7 +178,9 @@ class TestGeminiAnalysis:
         assert "gaps" in analysis
         assert "recommendations" in analysis
 
-        call_args = lambda_function_module.Client.return_value.models.generate_content.call_args[1]
+        call_args = genai_client(
+            lambda_function_module
+        ).return_value.models.generate_content.call_args[1]
         assert call_args["model"] == "gemini-3-flash-preview"
 
         config = call_args["config"]
@@ -203,21 +206,21 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         set_job_record(mock_boto3_clients)
-        lambda_function_module.Client.return_value.models.generate_content.return_value.text = (
-            json.dumps(
-                {
-                    "name": "Jane Doe",
-                    "contact_info": {
-                        "email": "",
-                        "phone": "",
-                        "location": "",
-                        "linkedin": "",
-                    },
-                    "summary": "",
-                    "skills": [],
-                    "experience": [],
-                }
-            )
+        genai_client(
+            lambda_function_module
+        ).return_value.models.generate_content.return_value.text = json.dumps(
+            {
+                "name": "Jane Doe",
+                "contact_info": {
+                    "email": "",
+                    "phone": "",
+                    "location": "",
+                    "linkedin": "",
+                },
+                "summary": "",
+                "skills": [],
+                "experience": [],
+            }
         )
 
         response = lambda_function_module.lambda_handler(
@@ -356,9 +359,9 @@ class TestGeminiAnalysis:
         mock_boto3_clients: dict[str, Any],
     ) -> None:
         set_job_record(mock_boto3_clients)
-        lambda_function_module.Client.return_value.models.generate_content.return_value.text = (
-            "not json"
-        )
+        genai_client(
+            lambda_function_module
+        ).return_value.models.generate_content.return_value.text = "not json"
 
         response = lambda_function_module.lambda_handler(
             worker_event(lambda_function_module),
@@ -438,7 +441,7 @@ class TestGeminiAnalysis:
             lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
 
     def test_analyze_empty_gemini_response(self, lambda_function_module: Any) -> None:
-        mock_client = lambda_function_module.Client.return_value
+        mock_client = genai_client(lambda_function_module).return_value
         mock_client.models.generate_content.return_value.text = None
         with pytest.raises(RuntimeError, match="empty response"):
             lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
@@ -458,7 +461,7 @@ class TestGeminiAnalysis:
             sleep_calls.append,
         )
 
-        mock_client = lambda_function_module.Client.return_value
+        mock_client = genai_client(lambda_function_module).return_value
         mock_client.models.generate_content.side_effect = [
             FakeServerUnavailableError(),
             FakeServerUnavailableError(),
@@ -489,7 +492,7 @@ class TestGeminiAnalysis:
             sleep_calls.append,
         )
 
-        mock_client = lambda_function_module.Client.return_value
+        mock_client = genai_client(lambda_function_module).return_value
         mock_client.models.generate_content.side_effect = [
             FakeRateLimitError(),
             mock_client.models.generate_content.return_value,
@@ -548,10 +551,12 @@ class TestGeminiAnalysis:
 
         lambda_function_module.analyze_resume_pdf(b"%PDF-1.4", "job desc")
 
-        assert lambda_function_module.Client.call_args[1]["api_key"] == "secret-api-key"
+        assert genai_client(lambda_function_module).call_args[1]["api_key"] == "secret-api-key"
 
     def test_update_job_status_no_job_id(self, lambda_function_module: Any) -> None:
-        lambda_function_module._update_job_status(None, "completed")
+        lambda_function_module._update_job_status(
+            None, lambda_function_module._JobStatusUpdate("completed")
+        )
 
     def test_update_job_status_no_table(self, lambda_function_module: Any) -> None:
         original = lambda_function_module.get_results_table
@@ -561,7 +566,9 @@ class TestGeminiAnalysis:
 
         lambda_function_module.get_results_table = _no_table
         try:
-            lambda_function_module._update_job_status("job-123", "completed")
+            lambda_function_module._update_job_status(
+                "job-123", lambda_function_module._JobStatusUpdate("completed")
+            )
         finally:
             lambda_function_module.get_results_table = original
 
@@ -569,7 +576,9 @@ class TestGeminiAnalysis:
         self, lambda_function_module: Any, mock_boto3_clients: dict[str, Any]
     ) -> None:
         mock_boto3_clients["dynamodb_table"].update_item.side_effect = Exception("DB error")
-        lambda_function_module._update_job_status("job-123", "completed")
+        lambda_function_module._update_job_status(
+            "job-123", lambda_function_module._JobStatusUpdate("completed")
+        )
 
     def test_get_job_record_no_table(self, lambda_function_module: Any) -> None:
         original = lambda_function_module.get_results_table
@@ -661,7 +670,9 @@ class TestGeminiAnalysis:
         assert body["message"] == "Analysis already completed"
         assert "analysis_result" not in body
         lambda_function_module.get_s3_client().get_object.assert_not_called()
-        lambda_function_module.Client.return_value.models.generate_content.assert_not_called()
+        genai_client(
+            lambda_function_module
+        ).return_value.models.generate_content.assert_not_called()
 
     def test_rejects_duplicate_processing_request(
         self,

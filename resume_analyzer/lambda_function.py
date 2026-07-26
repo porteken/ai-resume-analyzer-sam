@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -40,37 +41,31 @@ MAX_GEMINI_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 INTERNAL_WORKER_SOURCE = "resume-analyzer.worker"
 
-# How much of the Lambda's remaining wall-clock time to always hold back so a
-# failed/hung Gemini call still leaves room for _set_job_failed to run before
-# the container is killed at the function Timeout.
 GEMINI_TIMEOUT_FLOOR_MS = 5_000
 MIN_GEMINI_TIMEOUT_MS = 3_000
 DEFAULT_GEMINI_TIMEOUT_MS = 60_000
 
-# Response list-length caps, enforced via JSON-schema maxItems so the model
-# cannot generate an unbounded reply. Output tokens are generated serially,
-# so this directly bounds latency.
 MAX_LIST_ITEMS = 8
 MAX_EXPERIENCE_ENTRIES = 6
 MAX_EDUCATION_ENTRIES = 4
 MAX_HIGHLIGHTS_PER_ROLE = 5
 
-# google.genai pulls in pydantic/httpx/google.auth/cryptography (~1s import
-# cost) but is only needed on the worker path, not the synchronous /analyze
-# API path that just queues the job. Deferring the import means a cold start
-# whose first invocation is the API path never pays for it.
-Client: Any = None
-types: Any = None
+
+_GENAI_MODULE_CACHE: dict[str, Any] = {"module": None}
 
 
-def _ensure_genai_imported() -> None:
-    global Client, types  # noqa: PLW0603
-    if Client is None:
-        from google.genai import Client as _Client  # noqa: PLC0415
-        from google.genai import types as _types  # noqa: PLC0415
+def _genai() -> Any:
+    """Return the google.genai module, importing it on first use.
 
-        Client = _Client
-        types = _types
+    google.genai is only needed on the worker path, not on the synchronous API
+    path that just queues a job, so the import is deferred to keep it off the
+    cold start of an invocation that never calls Gemini.
+    """
+    module = _GENAI_MODULE_CACHE["module"]
+    if module is None:
+        module = importlib.import_module("google.genai")
+        _GENAI_MODULE_CACHE["module"] = module
+    return module
 
 
 CLIENT_CACHE_KEYS = (
@@ -326,10 +321,9 @@ def _get_google_api_key() -> str:
 
 
 def _get_genai_client() -> Any:
-    _ensure_genai_imported()
     api_key = _get_google_api_key()
     if _CLIENT_CACHE["genai_client"] is None or _CLIENT_CACHE["genai_client_api_key"] != api_key:
-        _CLIENT_CACHE["genai_client"] = Client(api_key=api_key)
+        _CLIENT_CACHE["genai_client"] = _genai().Client(api_key=api_key)
         _CLIENT_CACHE["genai_client_api_key"] = api_key
     return _CLIENT_CACHE["genai_client"]
 
@@ -387,12 +381,12 @@ def _resolve_thinking_config() -> Any | None:
     """
     if not GEMINI_THINKING_LEVEL:
         return None
-    _ensure_genai_imported()
+    genai_types = _genai().types
     try:
-        level = types.ThinkingLevel[GEMINI_THINKING_LEVEL]
+        level = genai_types.ThinkingLevel[GEMINI_THINKING_LEVEL]
     except KeyError as exc:
         raise RuntimeError(f"Invalid GEMINI_THINKING_LEVEL: {GEMINI_THINKING_LEVEL!r}") from exc
-    return types.ThinkingConfig(thinking_level=level)
+    return genai_types.ThinkingConfig(thinking_level=level)
 
 
 def _log_gemini_usage(response: Any) -> None:
@@ -411,7 +405,7 @@ def _log_gemini_usage(response: Any) -> None:
 def _raise_if_truncated(response: Any) -> None:
     candidates = getattr(response, "candidates", None) or []
     finish_reason = candidates[0].finish_reason if candidates else None
-    if finish_reason == types.FinishReason.MAX_TOKENS:
+    if finish_reason == _genai().types.FinishReason.MAX_TOKENS:
         raise RuntimeError(
             "Gemini response was truncated by max_output_tokens="
             f"{GEMINI_MAX_OUTPUT_TOKENS}; raise GEMINI_MAX_OUTPUT_TOKENS or tighten the "
@@ -425,12 +419,9 @@ def analyze_resume_pdf(
     context: Any = None,
 ) -> dict[str, Any]:
     """Call Gemini 3 Flash Preview with native PDF input and strict JSON schema output."""
-    _ensure_genai_imported()
+    genai_types = _genai().types
     prompt = _build_analysis_prompt(job_description)
-    # Static instructions live in system_instruction; PDF stays last in contents
-    # so the (currently short, non-cacheable) static prefix precedes the large
-    # variable payload if the request ever grows past implicit-caching thresholds.
-    contents = [prompt, types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")]
+    contents = [prompt, genai_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")]
     del pdf_bytes
     thinking_config = _resolve_thinking_config()
 
@@ -440,14 +431,16 @@ def analyze_resume_pdf(
             response = _get_genai_client().models.generate_content(
                 model=GEMINI_MODEL_ID,
                 contents=contents,
-                config=types.GenerateContentConfig(
+                config=genai_types.GenerateContentConfig(
                     system_instruction=_build_system_instruction(),
                     response_mime_type="application/json",
                     response_json_schema=RESUME_ANALYSIS_RESPONSE_SCHEMA,
                     temperature=0.2,
                     max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
                     thinking_config=thinking_config,
-                    http_options=types.HttpOptions(timeout=_resolve_gemini_timeout_ms(context)),
+                    http_options=genai_types.HttpOptions(
+                        timeout=_resolve_gemini_timeout_ms(context)
+                    ),
                 ),
             )
             break
@@ -488,15 +481,18 @@ def _conditional_check_failed(exc: Exception) -> bool:
     )
 
 
-def _update_job_status(  # noqa: PLR0913
-    job_id: str | None,
-    status_value: str,
-    analysis_result: dict[str, Any] | None = None,
-    error: str | None = None,
-    *,
-    expected_statuses: set[str] | None = None,
-    job_description: str | None = None,
-) -> None:
+@dataclass(slots=True)
+class _JobStatusUpdate:
+    """Attributes written by a single job-status transition."""
+
+    status_value: str
+    analysis_result: dict[str, Any] | None = None
+    error: str | None = None
+    expected_statuses: set[str] | None = None
+    job_description: str | None = None
+
+
+def _update_job_status(job_id: str | None, update: _JobStatusUpdate) -> None:
     if not job_id:
         return
 
@@ -507,22 +503,22 @@ def _update_job_status(  # noqa: PLR0913
 
     assignments = ["#status = :status"]
     names = {"#status": "status"}
-    values: dict[str, Any] = {":status": status_value}
+    values: dict[str, Any] = {":status": update.status_value}
     condition = "attribute_exists(job_id)"
 
-    if analysis_result is not None:
-        _append_completed_update(assignments, values, analysis_result)
+    if update.analysis_result is not None:
+        _append_completed_update(assignments, values, update.analysis_result)
 
-    if error:
-        _append_error_update(assignments, names, values, error)
+    if update.error:
+        _append_error_update(assignments, names, values, update.error)
 
-    if job_description is not None:
+    if update.job_description is not None:
         assignments.append("job_description = :job_description")
-        values[":job_description"] = job_description
+        values[":job_description"] = update.job_description
 
-    if expected_statuses:
+    if update.expected_statuses:
         placeholders: list[str] = []
-        for index, expected in enumerate(sorted(expected_statuses)):
+        for index, expected in enumerate(sorted(update.expected_statuses)):
             placeholder = f":expected{index}"
             placeholders.append(placeholder)
             values[placeholder] = expected
@@ -588,9 +584,11 @@ def _try_job_status_transition(
     try:
         _update_job_status(
             job_id,
-            status_value,
-            expected_statuses=expected_statuses,
-            job_description=job_description,
+            _JobStatusUpdate(
+                status_value,
+                expected_statuses=expected_statuses,
+                job_description=job_description,
+            ),
         )
     except JobTransitionError:
         return False
@@ -600,7 +598,7 @@ def _try_job_status_transition(
 
 def _set_job_failed(job_id: str | None, error: str) -> None:
     try:
-        _update_job_status(job_id, "failed", error=error)
+        _update_job_status(job_id, _JobStatusUpdate("failed", error=error))
     except JobTransitionError:
         logger.info("Skipping failed status update because the job no longer exists")
 
@@ -609,9 +607,11 @@ def _set_job_completed(job_id: str, analysis_result: dict[str, Any]) -> None:
     try:
         _update_job_status(
             job_id,
-            "completed",
-            analysis_result=analysis_result,
-            expected_statuses={"processing"},
+            _JobStatusUpdate(
+                "completed",
+                analysis_result=analysis_result,
+                expected_statuses={"processing"},
+            ),
         )
     except JobTransitionError:
         logger.warning("Skipping completed status update because the job was not processing")

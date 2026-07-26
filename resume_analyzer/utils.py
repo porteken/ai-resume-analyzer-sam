@@ -31,9 +31,6 @@ _CLIENT_CACHE: dict[str, Any | None] = dict.fromkeys(CLIENT_CACHE_KEYS)
 
 _BOTO_RETRIES: _RetryDict = {"max_attempts": 3, "mode": "standard"}
 
-# Explicit socket timeouts: botocore defaults to 60s for both, which is longer
-# than the 10s Timeout on the API-path functions, so a stalled AWS call would
-# burn the whole Lambda budget instead of failing fast enough to retry.
 AWS_CONNECT_TIMEOUT = float(os.getenv("AWS_CONNECT_TIMEOUT", "3"))
 AWS_READ_TIMEOUT = float(os.getenv("AWS_READ_TIMEOUT", "10"))
 
