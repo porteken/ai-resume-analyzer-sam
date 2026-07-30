@@ -20,7 +20,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
-    "pyright>=1.1.0",
+    "pyrefly>=0.35.0",
     "python-dotenv>=1.0.0",
     "python-lambda-local>=0.1.0",
     "ruff>=0.1.0",
@@ -59,3 +59,19 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "resume_analyzer/upload_handler.py" = ["C901", "PLR0911"]
 "tests/*" = ["S101", "PLR2004", "FBT001", "ANN001", "SLF001", "PLC0415", "D101", "D102", "D107"]
+
+[tool.pyrefly]
+project-includes = ["resume_analyzer", "tests"]
+project-excludes = [
+    "**/.[!/.]*",
+    "**/__pycache__",
+    "**/site-packages",
+    ".aws-sam",
+    "build",
+    "dist",
+    "layers",
+    "node_modules",
+    "venv",
+]
+python-platform = "linux"
+python-version = "3.14"

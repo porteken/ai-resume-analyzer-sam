@@ -729,7 +729,7 @@ def _validate_s3_location(
 
 def _parse_worker_event(event: dict[str, Any]) -> str | None:
     if event.get("source") == INTERNAL_WORKER_SOURCE and isinstance(event.get("job_id"), str):
-        return str(event["job_id"])
+        return event["job_id"]
     return None
 
 

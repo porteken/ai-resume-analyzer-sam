@@ -6,16 +6,17 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.409
-    hooks:
-      - id: pyright
   - repo: local
     hooks:
+      - id: pyrefly-check
+        name: Pyrefly (type checking)
+        entry: uv run --locked --no-sync pyrefly check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: pytest
         name: Run Pytest
         entry: uv run pytest --no-cov
         language: system
         pass_filenames: false
         always_run: true
-
