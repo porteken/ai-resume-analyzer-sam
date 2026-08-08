@@ -529,6 +529,7 @@ class TestGeminiAnalysis:
         self,
         lambda_function_module: Any,
         exc: Exception,
+        *,
         expected: bool,
     ) -> None:
         assert lambda_function_module._is_retryable_upstream_error(exc) is expected

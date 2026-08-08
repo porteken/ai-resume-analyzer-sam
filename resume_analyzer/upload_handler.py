@@ -168,18 +168,24 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             filename=filename,
             job_description=job_description,
         )
-        return _upload_response(event, job_id=job_id, s3_key=s3_key, presigned_post=presigned_post)
+        response = _upload_response(
+            event,
+            job_id=job_id,
+            s3_key=s3_key,
+            presigned_post=presigned_post,
+        )
     except binascii.Error, UnicodeDecodeError:
-        return _error_response(event, 400, "Invalid base64-encoded body")
+        response = _error_response(event, 400, "Invalid base64-encoded body")
     except json.JSONDecodeError:
-        return _error_response(event, 400, "Invalid JSON format")
+        response = _error_response(event, 400, "Invalid JSON format")
     except (TypeError, ValueError) as exc:
-        return _error_response(event, 400, str(exc))
+        response = _error_response(event, 400, str(exc))
     except RuntimeError as exc:
-        return _error_response(event, 500, str(exc))
+        response = _error_response(event, 500, str(exc))
     except BotoCoreError, ClientError:
         logger.exception("Upload handler failed")
-        return _error_response(event, 500, "Internal server error")
+        response = _error_response(event, 500, "Internal server error")
     except AttributeError, KeyError:
         logger.exception("Unexpected upload handler failure")
-        return _error_response(event, 500, "Internal server error")
+        response = _error_response(event, 500, "Internal server error")
+    return response

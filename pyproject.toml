@@ -57,8 +57,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"resume_analyzer/upload_handler.py" = ["C901", "PLR0911"]
-"tests/*" = ["S101", "PLR2004", "FBT001", "ANN001", "SLF001", "PLC0415", "D101", "D102", "D107"]
+"tests/*" = ["S101", "PLR2004", "ANN001", "SLF001", "PLC0415", "D101", "D102", "D107"]
 
 [tool.pyrefly]
 project-includes = ["resume_analyzer", "tests"]
