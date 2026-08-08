@@ -1,4 +1,7 @@
-"""Unit tests for upload_handler.py."""
+"""Copyright 2026.
+
+Unit tests for upload_handler.py.
+"""
 
 import json
 from typing import Any

@@ -1,4 +1,7 @@
-"""Shared test utilities and common assertion helpers."""
+"""Copyright 2026.
+
+Shared test utilities and common assertion helpers.
+"""
 
 import json
 from typing import Any

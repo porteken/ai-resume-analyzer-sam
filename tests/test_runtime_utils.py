@@ -1,4 +1,7 @@
-"""Unit tests for runtime helpers in resume_analyzer.utils."""
+"""Copyright 2026.
+
+Unit tests for runtime helpers in resume_analyzer.utils.
+"""
 
 from unittest.mock import MagicMock
 

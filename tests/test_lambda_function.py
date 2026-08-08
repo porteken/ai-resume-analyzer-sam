@@ -1,4 +1,7 @@
-"""Unit tests for lambda_function.py."""
+"""Copyright 2026.
+
+Unit tests for lambda_function.py.
+"""
 
 import base64
 import json

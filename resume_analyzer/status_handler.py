@@ -1,4 +1,7 @@
-"""Return analysis job status from DynamoDB."""
+"""Copyright 2026.
+
+Return analysis job status from DynamoDB.
+"""
 
 import importlib
 import logging
@@ -33,7 +36,7 @@ def _is_job_expired(ttl_value: Any) -> bool:
 
     try:
         return int(ttl_value) <= int(time.time())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
 
 
@@ -85,9 +88,9 @@ def lambda_handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             return _error_response(event, 404, "Job has expired")
 
         return api_response(200, _status_payload(job_id, item), event=event)
-    except (BotoCoreError, ClientError, RuntimeError):
+    except BotoCoreError, ClientError, RuntimeError:
         logger.exception("Status handler failed")
         return _error_response(event, 500, "Internal server error")
-    except (AttributeError, TypeError, ValueError):
+    except AttributeError, TypeError, ValueError:
         logger.exception("Unexpected status handler failure")
         return _error_response(event, 500, "Internal server error")

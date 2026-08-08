@@ -1,4 +1,7 @@
-"""Basic functionality tests that don't require complex AWS mocking."""
+"""Copyright 2026.
+
+Basic functionality tests that don't require complex AWS mocking.
+"""
 
 import json
 import os

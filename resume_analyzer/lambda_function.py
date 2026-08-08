@@ -1,4 +1,7 @@
-"""Analyze uploaded resumes and coordinate asynchronous processing jobs."""
+"""Copyright 2026.
+
+Analyze uploaded resumes and coordinate asynchronous processing jobs.
+"""
 
 import base64
 import binascii
@@ -899,7 +902,7 @@ def _handle_analysis_error(
         _fail_job_if_present(job_id, message)
         return _error_response(event, 503, message, error_type="ServiceUnavailable")
 
-    logger.exception("Analysis handler failed")
+    logger.error("Analysis handler failed: %s", exc)
     _fail_job_if_present(job_id, str(exc))
     return _error_response(event, 500, "Internal server error")
 

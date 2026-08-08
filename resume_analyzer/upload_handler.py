@@ -1,4 +1,7 @@
-"""Create presigned upload requests for resume PDFs."""
+"""Copyright 2026.
+
+Create presigned upload requests for resume PDFs.
+"""
 
 import base64
 import binascii

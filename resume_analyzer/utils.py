@@ -1,4 +1,7 @@
-"""Shared AWS client, response, and normalization helpers."""
+"""Copyright 2026.
+
+Shared AWS client, response, and normalization helpers.
+"""
 
 import json
 import logging

@@ -1,4 +1,7 @@
-"""Regression tests for SAM template layer packaging."""
+"""Copyright 2026.
+
+Regression tests for SAM template layer packaging.
+"""
 
 from pathlib import Path
 

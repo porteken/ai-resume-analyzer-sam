@@ -1,4 +1,7 @@
-"""Unit tests for status_handler.py."""
+"""Copyright 2026.
+
+Unit tests for status_handler.py.
+"""
 
 import time
 from typing import Any

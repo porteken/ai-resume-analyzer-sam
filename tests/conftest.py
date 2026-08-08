@@ -1,4 +1,7 @@
-"""Pytest configuration and shared fixtures."""
+"""Copyright 2026.
+
+Pytest configuration and shared fixtures.
+"""
 
 import json
 import sys
