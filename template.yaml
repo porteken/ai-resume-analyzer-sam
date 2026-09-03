@@ -65,6 +65,8 @@ Conditions:
   UseS3AccessLogging: !Equals [!Ref EnableS3AccessLogging, "true"]
   UseAccessLogsAuditBucket: !Not [!Equals [!Ref AccessLogsAuditBucketName, ""]]
   UseGoogleApiKeySecretArn: !Not [!Equals [!Ref GoogleApiKeySecretArn, ""]]
+  CreateNewApi: !Equals [!Ref ExistingApiId, ""]
+  UseExistingApi: !Not [!Equals [!Ref ExistingApiId, ""]]
 Globals:
   Function:
     Runtime: python3.14
@@ -243,6 +245,30 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  ResumeAnalyzerApi:
+    Type: AWS::Serverless::Api
+    Condition: CreateNewApi
+    Properties:
+      StageName: !Ref ApiStageName
+      OpenApiVersion: '3.0.1'
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
+        AllowOrigin: !Select [0, !Split [",", !Ref AllowedOrigins]]
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Select [0, !Split [",", !Ref AllowedOrigins]]
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Select [0, !Split [",", !Ref AllowedOrigins]]
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
+              Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+
   PresignedUploadFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -267,6 +293,15 @@ Resources:
           RESUME_BUCKET: !Ref ResumeS3Bucket
           RESULTS_TABLE: !Ref ResultsTable
           UPLOAD_EXPIRES_SECONDS: '900'
+    Events: !If
+      - CreateNewApi
+      - UploadApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /upload
+            Method: POST
+      - !Ref AWS::NoValue
 
   AnalyzeFunction:
     Type: AWS::Serverless::Function
@@ -312,6 +347,15 @@ Resources:
           RESULTS_TABLE: !Ref ResultsTable
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
           ANALYZE_FUNCTION_NAME: !Sub '${AWS::StackName}-AnalyzeFunction'
+    Events: !If
+      - CreateNewApi
+      - AnalyzeApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /analyze
+            Method: POST
+      - !Ref AWS::NoValue
 
   StatusFunction:
     Type: AWS::Serverless::Function
@@ -330,9 +374,19 @@ Resources:
               Action:
                 - dynamodb:GetItem
               Resource: !GetAtt ResultsTable.Arn
+    Events: !If
+      - CreateNewApi
+      - StatusApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ResumeAnalyzerApi
+            Path: /status/{job_id}
+            Method: GET
+      - !Ref AWS::NoValue
 
   PresignedUploadInvokePermissionForApiGateway:
     Type: AWS::Lambda::Permission
+    Condition: UseExistingApi
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !Ref PresignedUploadFunction
@@ -341,6 +395,7 @@ Resources:
 
   AnalyzeInvokePermissionForApiGateway:
     Type: AWS::Lambda::Permission
+    Condition: UseExistingApi
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !Ref AnalyzeFunction
@@ -349,6 +404,7 @@ Resources:
 
   StatusInvokePermissionForApiGateway:
     Type: AWS::Lambda::Permission
+    Condition: UseExistingApi
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !Ref StatusFunction
@@ -489,12 +545,25 @@ Outputs:
 
   UploadEndpoint:
     Description: Endpoint to request a presigned upload POST
-    Value: !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
+    Value: !If
+      - CreateNewApi
+      - !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
+      - !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/upload
 
   AnalyzeEndpoint:
     Description: Endpoint to trigger analysis
-    Value: !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
+    Value: !If
+      - CreateNewApi
+      - !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
+      - !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/analyze
 
   StatusEndpoint:
     Description: Endpoint to fetch status
-    Value: !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}
+    Value: !If
+      - CreateNewApi
+      - !Sub https://${ResumeAnalyzerApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}
+      - !Sub https://${ExistingApiId}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/status/{job_id}
+
+  ApiId:
+    Description: API Gateway REST API ID in use (new or existing)
+    Value: !If [CreateNewApi, !Ref ResumeAnalyzerApi, !Ref ExistingApiId]

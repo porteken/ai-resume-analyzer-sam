@@ -1,6 +1,6 @@
 # AI Resume Analyzer (SAM)
 
-Backend for resume analysis using AWS Lambda + S3 and Google Gemini.
+Backend for resume analysis using AWS API Gateway,Lambda,S3, and Google Gemini.
 
 ## Flow
 1. `POST /upload` returns an S3 presigned POST for direct PDF upload.
