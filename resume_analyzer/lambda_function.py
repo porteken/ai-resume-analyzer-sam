@@ -371,7 +371,7 @@ def _resolve_gemini_timeout_ms(context: Any) -> int:
         return DEFAULT_GEMINI_TIMEOUT_MS
     try:
         remaining_ms = int(get_remaining())
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return DEFAULT_GEMINI_TIMEOUT_MS
     return max(remaining_ms - GEMINI_TIMEOUT_FLOOR_MS, MIN_GEMINI_TIMEOUT_MS)
 
@@ -837,10 +837,10 @@ def _get_job_record(job_id: str) -> dict[str, Any]:
         table = get_results_table()
         item = table.get_item(Key={"job_id": job_id}).get("Item")
         return item if isinstance(item, dict) else {}
-    except BotoCoreError, ClientError, RuntimeError:
+    except (BotoCoreError, ClientError, RuntimeError):
         logger.exception("Failed to read DynamoDB job record")
         return {}
-    except AttributeError, TypeError:
+    except (AttributeError, TypeError):
         logger.exception("Unexpected failure reading DynamoDB job record")
         return {}
 
@@ -859,7 +859,7 @@ def _extract_request(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str 
 
         if not isinstance(body, dict):
             return None, "Invalid JSON body"
-    except binascii.Error, UnicodeDecodeError:
+    except (binascii.Error, UnicodeDecodeError):
         return None, "Invalid base64-encoded body"
     except json.JSONDecodeError:
         return None, "Invalid JSON format"

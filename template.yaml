@@ -69,7 +69,7 @@ Conditions:
   UseExistingApi: !Not [!Equals [!Ref ExistingApiId, ""]]
 Globals:
   Function:
-    Runtime: python3.14
+    Runtime: python3.13
     Timeout: 10
     MemorySize: 128
     Architectures:
@@ -87,7 +87,7 @@ Resources:
       LayerName: !Sub '${AWS::StackName}-dependencies'
       ContentUri: layers/dependencies/
       CompatibleRuntimes:
-        - python3.14
+        - python3.13
       CompatibleArchitectures:
         - x86_64
 
