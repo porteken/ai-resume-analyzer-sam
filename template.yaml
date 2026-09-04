@@ -300,6 +300,11 @@ Resources:
     Properties:
       Name: !Sub '${AWS::StackName}-AnalyzerWebACL'
       Scope: REGIONAL
+      Tags:
+        - Key: StackName
+          Value: !Sub '${AWS::StackName}'
+        - Key: ManagedBy
+          Value: SAM
       DefaultAction:
         Allow: {}
       VisibilityConfig:
