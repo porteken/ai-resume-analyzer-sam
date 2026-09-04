@@ -632,7 +632,15 @@ jobs:
 
 
           USAGE_PLAN_NAME="ResumeAnalyzerUsagePlan"
-          API_KEY_NAME="ResumeAnalyzerApiKey"
+          # Per-stage API keys for dev/prod split (key hygiene).
+          # MANUAL ROTATION CHECKLIST (do NOT auto-rotate in CI - no creds in test):
+          # 1. Purge api_info.txt from history: `bfg --delete-files api_info.txt`, then
+          #    `git reflog expire --expire=now --all && git gc --prune=now --aggressive`, force-push (coordinate team).
+          # 2. AWS console: API Gateway > API Keys > create/rotate ResumeAnalyzerApiKey-dev and ResumeAnalyzerApiKey-prod, copy values.
+          # 3. Cloudflare Pages: set secret API_KEY per env (production=prod key, preview/dev=dev key), redeploy frontend.
+          # 4. Delete legacy shared ResumeAnalyzerApiKey once frontends migrated.
+          API_KEY_NAME="ResumeAnalyzerApiKey-${API_STAGE_NAME}"
+          LEGACY_API_KEY_NAME="ResumeAnalyzerApiKey"
 
           USAGE_PLAN_ID="$(normalize_id "$(
             aws apigateway get-usage-plans \
@@ -657,6 +665,26 @@ jobs:
               --patch-operations "op=add,path=/apiStages,value=${REST_API_ID}:${API_STAGE_NAME}" >/dev/null
           fi
 
+          # Global throttle (20 rps, burst 10) + monthly quota (50000/MONTH), idempotent.
+          aws apigateway update-usage-plan \
+            --usage-plan-id "$USAGE_PLAN_ID" \
+            --patch-operations \
+              "op=replace,path=/throttle/rateLimit,value=20" \
+              "op=replace,path=/throttle/burstLimit,value=10" \
+              "op=replace,path=/quota/limit,value=50000" \
+              "op=replace,path=/quota/period,value=MONTH" >/dev/null || true
+
+          # Per-method throttles (idempotent): POST /upload 5, POST /analyze 5, GET /status/{job_id} 50.
+          aws apigateway update-usage-plan \
+            --usage-plan-id "$USAGE_PLAN_ID" \
+            --patch-operations \
+              "op=replace,path=/apiStages/${REST_API_ID}:${API_STAGE_NAME}/throttle/~1upload~1POST/rateLimit,value=5" \
+              "op=replace,path=/apiStages/${REST_API_ID}:${API_STAGE_NAME}/throttle/~1upload~1POST/burstLimit,value=5" \
+              "op=replace,path=/apiStages/${REST_API_ID}:${API_STAGE_NAME}/throttle/~1analyze~1POST/rateLimit,value=5" \
+              "op=replace,path=/apiStages/${REST_API_ID}:${API_STAGE_NAME}/throttle/~1analyze~1POST/burstLimit,value=5" \
+              "op=replace,path=/apiStages/${REST_API_ID}:${API_STAGE_NAME}/throttle/~1status~1{job_id}~1GET/rateLimit,value=50" \
+              "op=replace,path=/apiStages/${REST_API_ID}:${API_STAGE_NAME}/throttle/~1status~1{job_id}~1GET/burstLimit,value=50" >/dev/null || true
+
           API_KEY_ID="$(normalize_id "$(
             aws apigateway get-api-keys \
               --name-query "$API_KEY_NAME" \
@@ -665,8 +693,29 @@ jobs:
               --output text
           )")"
 
+          # Backward compat: fall back to legacy shared key if stage-specific not found.
           if [[ -z "$API_KEY_ID" ]]; then
-            echo "::error::API key '${API_KEY_NAME}' not found in API Gateway. Create it manually (it must match the frontend's configured x-api-key value) before this workflow can attach it to the usage plan."
+            echo "Stage-specific key '${API_KEY_NAME}' not found, trying legacy '${LEGACY_API_KEY_NAME}'."
+            API_KEY_ID="$(normalize_id "$(
+              aws apigateway get-api-keys \
+                --name-query "$LEGACY_API_KEY_NAME" \
+                --no-include-values \
+                --query "items[?name=='${LEGACY_API_KEY_NAME}'].id | [0]" \
+                --output text
+            )")"
+          fi
+
+          # Idempotent create: if neither exists, create stage-specific key.
+          if [[ -z "$API_KEY_ID" ]]; then
+            echo "No existing key found, creating stage-specific key '${API_KEY_NAME}'."
+            API_KEY_ID="$(aws apigateway create-api-key \
+              --name "$API_KEY_NAME" \
+              --enabled \
+              --query 'id' --output text)"
+          fi
+
+          if [[ -z "$API_KEY_ID" ]]; then
+            echo "::error::Unable to resolve or create API key '${API_KEY_NAME}' (fallback '${LEGACY_API_KEY_NAME}')."
             exit 1
           fi
 
@@ -679,9 +728,39 @@ jobs:
             aws apigateway create-usage-plan-key \
               --usage-plan-id "$USAGE_PLAN_ID" \
               --key-id "$API_KEY_ID" \
-              --key-type API_KEY >/dev/null
+              --key-type API_KEY >/dev/null || true
           fi
 
+          # WAFv2 rate-based protection (idempotent, non-interactive).
+          # Mirrors template.yaml AnalyzerWebACL for the shared (UseExistingApi) REST API.
+          WAF_NAME="${SAM_STACK_NAME}-AnalyzerWebACL"
+          WAF_RESOURCE_ARN="arn:aws:apigateway:${REGION}::/restapis/${REST_API_ID}/stages/${API_STAGE_NAME}"
+          WAF_ACL_ID="$(normalize_id "$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" --query "WebACLs[?Name=='${WAF_NAME}'].Id | [0]" --output text 2>/dev/null || true)")"
+          WAF_ACL_ARN="$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" --query "WebACLs[?Name=='${WAF_NAME}'].ARN | [0]" --output text 2>/dev/null || true)"
+          if [[ -z "$WAF_ACL_ID" || "$WAF_ACL_ID" == "None" ]]; then
+            cat > /tmp/waf-rules.json <<'EOF'
+          [
+            {
+              "Name": "PerIpFlood",
+              "Priority": 1,
+              "Action": {"Block": {}},
+              "Statement": {"RateBasedStatement": {"Limit": 300, "AggregateKeyType": "IP"}},
+              "VisibilityConfig": {"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "PerIpFlood"}
+            },
+            {
+              "Name": "UploadAnalyzeFlood",
+              "Priority": 2,
+              "Action": {"Block": {}},
+              "Statement": {"RateBasedStatement": {"Limit": 30, "AggregateKeyType": "IP", "ScopeDownStatement": {"ByteMatchStatement": {"SearchString": "/upload", "FieldToMatch": {"UriPath": {}}, "TextTransformations": [{"Priority": 0, "Type": "LOWERCASE"}], "PositionalConstraint": "CONTAINS"}}}},
+              "VisibilityConfig": {"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "UploadAnalyzeFlood"}
+            }
+          ]
+          EOF
+            WAF_ACL_ARN="$(aws wafv2 create-web-acl --name "$WAF_NAME" --scope REGIONAL --region "$REGION" --default-action Allow={} --visibility-config SampledRequestsEnabled=true,CloudWatchMetricsEnabled=true,MetricName="${SAM_STACK_NAME}-AnalyzerWebACL" --rules file:///tmp/waf-rules.json --capacity 500 --query 'Summary.ARN' --output text 2>/dev/null || true)"
+          fi
+          if [[ -n "$WAF_ACL_ARN" && "$WAF_ACL_ARN" != "None" ]]; then
+            aws wafv2 associate-web-acl --web-acl-arn "$WAF_ACL_ARN" --resource-arn "$WAF_RESOURCE_ARN" --region "$REGION" >/dev/null || true
+          fi
 
           aws apigateway create-deployment \
             --rest-api-id "$REST_API_ID" \

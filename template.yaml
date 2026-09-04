@@ -269,6 +269,95 @@ Resources:
               Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Api-Key,X-Amz-Date,X-Amz-Security-Token'"
               Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
 
+  ResumeAnalyzerUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Condition: CreateNewApi
+    DependsOn: ResumeAnalyzerApi
+    Properties:
+      UsagePlanName: !Sub '${AWS::StackName}-ResumeAnalyzerUsagePlan'
+      Description: Throttle and quota for AI Resume Analyzer API (CreateNewApi mode).
+      ApiStages:
+        - ApiId: !Ref ResumeAnalyzerApi
+          Stage: !Ref ApiStageName
+          Throttle:
+            /upload/POST:
+              RateLimit: 5
+              BurstLimit: 5
+            /analyze/POST:
+              RateLimit: 5
+              BurstLimit: 5
+            /status/{job_id}/GET:
+              RateLimit: 50
+              BurstLimit: 50
+      Throttle:
+        RateLimit: 20
+        BurstLimit: 10
+      Quota:
+        Limit: 50000
+        Period: MONTH
+
+  AnalyzerWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub '${AWS::StackName}-AnalyzerWebACL'
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${AWS::StackName}-AnalyzerWebACL'
+      Capacity: 500
+      Rules:
+        - Name: PerIpFlood
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 300
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: PerIpFlood
+        - Name: UploadAnalyzeFlood
+          Priority: 2
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 30
+              AggregateKeyType: IP
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  SearchString: /upload
+                  FieldToMatch:
+                    UriPath: {}
+                  TextTransformations:
+                    - Priority: 0
+                      Type: LOWERCASE
+                  PositionalConstraint: CONTAINS
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: UploadAnalyzeFlood
+
+  AnalyzerWebACLAssocNewApi:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: CreateNewApi
+    DependsOn: ResumeAnalyzerApi
+    Properties:
+      ResourceArn: !Sub arn:aws:apigateway:${AWS::Region}::/restapis/${ResumeAnalyzerApi}/stages/${ApiStageName}
+      WebACLArn: !GetAtt AnalyzerWebACL.Arn
+
+  AnalyzerWebACLAssocExistingApi:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: UseExistingApi
+    Properties:
+      ResourceArn: !Sub arn:aws:apigateway:${AWS::Region}::/restapis/${ExistingApiId}/stages/${ApiStageName}
+      WebACLArn: !GetAtt AnalyzerWebACL.Arn
+
   PresignedUploadFunction:
     Type: AWS::Serverless::Function
     Properties:
