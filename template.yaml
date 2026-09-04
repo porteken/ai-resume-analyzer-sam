@@ -272,7 +272,6 @@ Resources:
   ResumeAnalyzerUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     Condition: CreateNewApi
-    DependsOn: ResumeAnalyzerApi
     Properties:
       UsagePlanName: !Sub '${AWS::StackName}-ResumeAnalyzerUsagePlan'
       Description: Throttle and quota for AI Resume Analyzer API (CreateNewApi mode).
@@ -346,7 +345,6 @@ Resources:
   AnalyzerWebACLAssocNewApi:
     Type: AWS::WAFv2::WebACLAssociation
     Condition: CreateNewApi
-    DependsOn: ResumeAnalyzerApi
     Properties:
       ResourceArn: !Sub arn:aws:apigateway:${AWS::Region}::/restapis/${ResumeAnalyzerApi}/stages/${ApiStageName}
       WebACLArn: !GetAtt AnalyzerWebACL.Arn
