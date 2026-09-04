@@ -731,35 +731,19 @@ jobs:
               --key-type API_KEY >/dev/null || true
           fi
 
-          # WAFv2 rate-based protection (idempotent, non-interactive).
-          # Mirrors template.yaml AnalyzerWebACL for the shared (UseExistingApi) REST API.
+          # WAFv2 association only - AnalyzerWebACL is owned by CloudFormation (template.yaml).
+          # Do NOT create via CLI (duplicate Name causes AlreadyExists CREATE_FAILED).
+          # Lookup CFN physical ARN first, fallback to list-by-name.
           WAF_NAME="${SAM_STACK_NAME}-AnalyzerWebACL"
           WAF_RESOURCE_ARN="arn:aws:apigateway:${REGION}::/restapis/${REST_API_ID}/stages/${API_STAGE_NAME}"
-          WAF_ACL_ID="$(normalize_id "$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" --query "WebACLs[?Name=='${WAF_NAME}'].Id | [0]" --output text 2>/dev/null || true)")"
-          WAF_ACL_ARN="$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" --query "WebACLs[?Name=='${WAF_NAME}'].ARN | [0]" --output text 2>/dev/null || true)"
-          if [[ -z "$WAF_ACL_ID" || "$WAF_ACL_ID" == "None" ]]; then
-            cat > /tmp/waf-rules.json <<'EOF'
-          [
-            {
-              "Name": "PerIpFlood",
-              "Priority": 1,
-              "Action": {"Block": {}},
-              "Statement": {"RateBasedStatement": {"Limit": 300, "AggregateKeyType": "IP"}},
-              "VisibilityConfig": {"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "PerIpFlood"}
-            },
-            {
-              "Name": "UploadAnalyzeFlood",
-              "Priority": 2,
-              "Action": {"Block": {}},
-              "Statement": {"RateBasedStatement": {"Limit": 30, "AggregateKeyType": "IP", "ScopeDownStatement": {"ByteMatchStatement": {"SearchString": "/upload", "FieldToMatch": {"UriPath": {}}, "TextTransformations": [{"Priority": 0, "Type": "LOWERCASE"}], "PositionalConstraint": "CONTAINS"}}}},
-              "VisibilityConfig": {"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "UploadAnalyzeFlood"}
-            }
-          ]
-          EOF
-            WAF_ACL_ARN="$(aws wafv2 create-web-acl --name "$WAF_NAME" --scope REGIONAL --region "$REGION" --default-action Allow={} --visibility-config SampledRequestsEnabled=true,CloudWatchMetricsEnabled=true,MetricName="${SAM_STACK_NAME}-AnalyzerWebACL" --rules file:///tmp/waf-rules.json --capacity 500 --query 'Summary.ARN' --output text 2>/dev/null || true)"
+          WAF_ACL_ARN="$(normalize_id "$(aws cloudformation describe-stack-resource --stack-name "$SAM_STACK_NAME" --logical-resource-id AnalyzerWebACL --region "$REGION" --query 'StackResourceDetail.PhysicalResourceId' --output text 2>/dev/null || true)")"
+          if [[ -z "$WAF_ACL_ARN" ]]; then
+            WAF_ACL_ARN="$(normalize_id "$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" --query "WebACLs[?Name=='${WAF_NAME}'].ARN | [0]" --output text 2>/dev/null || true)")"
           fi
-          if [[ -n "$WAF_ACL_ARN" && "$WAF_ACL_ARN" != "None" ]]; then
+          if [[ -n "$WAF_ACL_ARN" ]]; then
             aws wafv2 associate-web-acl --web-acl-arn "$WAF_ACL_ARN" --resource-arn "$WAF_RESOURCE_ARN" --region "$REGION" >/dev/null || true
+          else
+            echo "::warning::WAF ACL ${WAF_NAME} not found; skipping associate (CFN owns creation)."
           fi
 
           aws apigateway create-deployment \
